@@ -113,3 +113,34 @@ class TestServedDuplicateScriptIsGated(FrappeTestCase):
 		path = os.path.join(os.path.dirname(hooks.__file__), "public", "js", "remove_duplicates.js")
 		with open(path, encoding="utf-8") as f:
 			self.assertIn("if (!frappe.user.has_role(URY_ROLES)) return;", f.read())
+
+
+class TestRetryPrintJobIsRestricted(FrappeTestCase):
+	def test_non_manager_is_refused_before_the_job_is_read(self):
+		from ury.ury.printing import api
+		with patch.object(api.frappe, "only_for", side_effect=frappe.PermissionError) as only_for, \
+			 patch.object(api, "get_job") as get_job:
+			with self.assertRaises(frappe.PermissionError):
+				api.retry_print_job("JOB-1", target_printer="Kitchen")
+		only_for.assert_called_once()
+		get_job.assert_not_called()
+
+	def test_reference_document_read_permission_is_checked(self):
+		from ury.ury.printing import api
+		job = {"reference_doctype": "URY KOT", "reference_name": "KOT-1", "printer": "Kitchen"}
+		with patch.object(api.frappe, "only_for"), \
+			 patch.object(api, "get_job", return_value=job), \
+			 patch.object(api.frappe, "has_permission", side_effect=frappe.PermissionError) as has_perm:
+			with self.assertRaises(frappe.PermissionError):
+				api.retry_print_job("JOB-1")
+		has_perm.assert_called_once_with("URY KOT", "read", "KOT-1", throw=True)
+
+
+class TestPrintJobHasNoGuestAccess(FrappeTestCase):
+	def test_guest_is_not_granted(self):
+		import json, os
+		from ury.ury.doctype import ury_print_job
+		path = os.path.join(os.path.dirname(ury_print_job.__file__), "ury_print_job.json")
+		with open(path, encoding="utf-8") as f:
+			roles = {p["role"] for p in json.load(f)["permissions"]}
+		self.assertNotIn("Guest", roles)

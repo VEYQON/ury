@@ -468,9 +468,9 @@ class TestGetModuleRecords(FrappeTestCase):
             {"name": "ITEM-002", "item_name": "Coffee"},
         ]
         with patch(f"{MODULE}.frappe.db.exists") as mock_exists, \
-             patch(f"{MODULE}.frappe.get_all") as mock_get_all:
+             patch(f"{MODULE}.frappe.get_list") as mock_get_list:
             mock_exists.return_value = True
-            mock_get_all.return_value = mock_records
+            mock_get_list.return_value = mock_records
 
             result = get_module_records("Item")
 
@@ -490,9 +490,9 @@ class TestGetModuleRecords(FrappeTestCase):
     def test_module_records_handles_exception_gracefully(self):
         """Module records catches exceptions and returns empty list."""
         with patch(f"{MODULE}.frappe.db.exists") as mock_exists, \
-             patch(f"{MODULE}.frappe.get_all") as mock_get_all:
+             patch(f"{MODULE}.frappe.get_list") as mock_get_list:
             mock_exists.return_value = True
-            mock_get_all.side_effect = Exception("Database error")
+            mock_get_list.side_effect = Exception("Database error")
 
             result = get_module_records("Item")
 
@@ -502,16 +502,16 @@ class TestGetModuleRecords(FrappeTestCase):
         """Module records filters by 'branch' field when available."""
         with patch(f"{MODULE}.frappe.db.exists") as mock_exists, \
              patch(f"{MODULE}.frappe.get_meta") as mock_get_meta, \
-             patch(f"{MODULE}.frappe.get_all") as mock_get_all:
+             patch(f"{MODULE}.frappe.get_list") as mock_get_list:
             mock_exists.return_value = True
             mock_meta = MagicMock()
             mock_meta.has_field.side_effect = lambda field: field == "branch"
             mock_get_meta.return_value = mock_meta
-            mock_get_all.return_value = []
+            mock_get_list.return_value = []
 
             get_module_records("URY Table", branch="Main Branch")
 
-            called_kwargs = mock_get_all.call_args.kwargs
+            called_kwargs = mock_get_list.call_args.kwargs
             called_filters = called_kwargs.get("filters")
             self.assertEqual(called_filters.get("branch"), "Main Branch")
 
@@ -519,17 +519,17 @@ class TestGetModuleRecords(FrappeTestCase):
         """Module records falls back to 'custom_branch' field when 'branch' unavailable."""
         with patch(f"{MODULE}.frappe.db.exists") as mock_exists, \
              patch(f"{MODULE}.frappe.get_meta") as mock_get_meta, \
-             patch(f"{MODULE}.frappe.get_all") as mock_get_all:
+             patch(f"{MODULE}.frappe.get_list") as mock_get_list:
             mock_exists.return_value = True
             mock_meta = MagicMock()
             # has_branch returns False, has_custom_branch returns True
             mock_meta.has_field.side_effect = lambda field: field == "custom_branch"
             mock_get_meta.return_value = mock_meta
-            mock_get_all.return_value = []
+            mock_get_list.return_value = []
 
             get_module_records("POS Invoice", branch="Main Branch")
 
-            called_kwargs = mock_get_all.call_args.kwargs
+            called_kwargs = mock_get_list.call_args.kwargs
             called_filters = called_kwargs.get("filters")
             self.assertEqual(called_filters.get("custom_branch"), "Main Branch")
 
@@ -537,16 +537,16 @@ class TestGetModuleRecords(FrappeTestCase):
         """Module records doesn't filter branch when field doesn't exist on DocType."""
         with patch(f"{MODULE}.frappe.db.exists") as mock_exists, \
              patch(f"{MODULE}.frappe.get_meta") as mock_get_meta, \
-             patch(f"{MODULE}.frappe.get_all") as mock_get_all:
+             patch(f"{MODULE}.frappe.get_list") as mock_get_list:
             mock_exists.return_value = True
             mock_meta = MagicMock()
             mock_meta.has_field.return_value = False  # No branch or custom_branch
             mock_get_meta.return_value = mock_meta
-            mock_get_all.return_value = []
+            mock_get_list.return_value = []
 
             get_module_records("User", branch="Main Branch")
 
-            called_kwargs = mock_get_all.call_args.kwargs
+            called_kwargs = mock_get_list.call_args.kwargs
             called_filters = called_kwargs.get("filters")
             # Filters should be empty (branch not applied)
             self.assertEqual(called_filters, {})
@@ -555,17 +555,17 @@ class TestGetModuleRecords(FrappeTestCase):
         """Module records doesn't filter when branch='all' (passes through)."""
         with patch(f"{MODULE}.frappe.db.exists") as mock_exists, \
              patch(f"{MODULE}.frappe.get_meta") as mock_get_meta, \
-             patch(f"{MODULE}.frappe.get_all") as mock_get_all:
+             patch(f"{MODULE}.frappe.get_list") as mock_get_list:
             mock_exists.return_value = True
             mock_meta = MagicMock()
             mock_meta.has_field.return_value = False
             mock_get_meta.return_value = mock_meta
-            mock_get_all.return_value = []
+            mock_get_list.return_value = []
 
             get_module_records("Item", branch="all")
 
             # With branch='all', the code doesn't enter the branch check block
-            called_kwargs = mock_get_all.call_args.kwargs
+            called_kwargs = mock_get_list.call_args.kwargs
             called_filters = called_kwargs.get("filters")
             # Note: the actual code has `if branch and branch != 'all': pass`
             # so filtering is skipped for 'all'
@@ -574,25 +574,33 @@ class TestGetModuleRecords(FrappeTestCase):
     def test_module_records_requests_all_fields(self):
         """Module records fetches all fields ('*')."""
         with patch(f"{MODULE}.frappe.db.exists") as mock_exists, \
-             patch(f"{MODULE}.frappe.get_all") as mock_get_all:
+             patch(f"{MODULE}.frappe.get_list") as mock_get_list:
             mock_exists.return_value = True
-            mock_get_all.return_value = []
+            mock_get_list.return_value = []
 
             get_module_records("Item")
 
-            called_kwargs = mock_get_all.call_args.kwargs
+            called_kwargs = mock_get_list.call_args.kwargs
             self.assertEqual(called_kwargs.get("fields"), ["*"])
 
     def test_module_records_with_no_branch_parameter(self):
         """Module records works without branch parameter."""
         with patch(f"{MODULE}.frappe.db.exists") as mock_exists, \
-             patch(f"{MODULE}.frappe.get_all") as mock_get_all:
+             patch(f"{MODULE}.frappe.get_list") as mock_get_list:
             mock_exists.return_value = True
-            mock_get_all.return_value = []
+            mock_get_list.return_value = []
 
             result = get_module_records("Item")
 
             self.assertEqual(result, [])
-            called_kwargs = mock_get_all.call_args.kwargs
+            called_kwargs = mock_get_list.call_args.kwargs
             called_filters = called_kwargs.get("filters")
             self.assertEqual(called_filters, {})
+
+    def test_module_records_uses_permission_checked_get_list(self):
+        """VEYQON shared-tenant: must not fall back to permission-free get_all."""
+        with patch(f"{MODULE}.frappe.db.exists", return_value=True),              patch(f"{MODULE}.frappe.get_all") as mock_get_all,              patch(f"{MODULE}.frappe.get_list", return_value=[]) as mock_get_list:
+            get_module_records("Salary Slip")
+        mock_get_all.assert_not_called()
+        mock_get_list.assert_called_once()
+

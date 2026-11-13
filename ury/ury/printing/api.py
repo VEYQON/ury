@@ -14,9 +14,17 @@ def retry_print_job(print_job_id: str, target_printer: str = None) -> dict:
     Retrieves the persisted PDF directly from the URY Print Job record and resubmits it to
     the target printer (or original printer) without re-rendering.
     """
+    # VEYQON shared-tenant: was callable by any logged-in user for any job and printer.
+    frappe.only_for(["System Manager", "URY Manager", "URY Admin"])
+
     job = get_job(print_job_id)
     if not job:
         frappe.throw(_("Print Job '{0}' not found.").format(print_job_id), frappe.DoesNotExistError)
+
+    ref_doctype = job.get("reference_doctype") or ("POS Invoice" if job.get("invoice") else None)
+    ref_name = job.get("reference_name") or job.get("invoice")
+    if ref_doctype and ref_name:
+        frappe.has_permission(ref_doctype, "read", ref_name, throw=True)
 
     file_path = job.get("file_path")
     invoice = job.get("invoice") or job.get("reference_name")

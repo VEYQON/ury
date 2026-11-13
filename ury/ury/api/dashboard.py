@@ -120,6 +120,8 @@ def get_module_records(doctype, branch=None):
 			filters["custom_branch"] = branch
 
 	try:
-		return frappe.get_all(doctype, filters=filters, fields=["*"])
+		# VEYQON shared-tenant: get_list applies the caller's permissions; get_all returned
+		# every row of any DocType to any logged-in user.
+		return frappe.get_list(doctype, filters=filters, fields=["*"])
 	except Exception:
 		return []

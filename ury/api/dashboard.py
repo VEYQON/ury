@@ -169,4 +169,6 @@ def get_module_records(doctype, branch=None):
             # handle branching for records if the doctype has branch field.
             pass
             
-    return frappe.db.get_all(doctype, fields=["*"])
+    # VEYQON shared-tenant: get_list applies the caller's permissions (was db.get_all:
+    # every User / POS Invoice row to any logged-in user).
+    return frappe.get_list(doctype, fields=["*"])
