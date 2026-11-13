@@ -68,9 +68,13 @@ class BulkProduction(Document):
 	def retry(self):
 		# VEYQON: only a submitted run that failed may be retried (a retry on a posted run
 		# duplicated every Stock Entry), and only by someone who may submit Stock Entries.
-		if self.docstatus != 1 or self.status != "Failed":
+		# Re-read under a row lock so two concurrent retries cannot both pass the check.
+		status = frappe.db.get_value("Bulk Production", self.name, "status", for_update=True)
+		if self.docstatus != 1 or status != "Failed":
 			frappe.throw(frappe._("Only a submitted Bulk Production with status Failed can be retried."))
 		frappe.has_permission("Stock Entry", "submit", throw=True)
+		frappe.db.set_value("Bulk Production", self.name, "status", "Queued", update_modified=False)
+		self.status = "Queued"
 		self.enqueue_save_stockentry()
 
 	def enqueue_save_stockentry(self):

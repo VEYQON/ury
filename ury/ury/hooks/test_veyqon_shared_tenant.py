@@ -164,8 +164,9 @@ class TestBulkProductionStockEntries(FrappeTestCase):
 		set_value.assert_not_called()
 
 	def test_retry_refused_unless_submitted_and_failed(self):
-		bp, doc = self._bp(status="Completed")
-		with patch.object(bp.BulkProduction, "enqueue_save_stockentry") as enqueue:
+		bp, doc = self._bp(status="Failed")
+		# the locked re-read wins over the stale in-memory status
+		with patch.object(bp.frappe.db, "get_value", return_value="Queued"), 			 patch.object(bp.BulkProduction, "enqueue_save_stockentry") as enqueue:
 			with self.assertRaises(frappe.ValidationError):
 				doc.retry()
 		enqueue.assert_not_called()
@@ -177,3 +178,10 @@ class TestBulkProductionStockEntries(FrappeTestCase):
 			with self.assertRaises(frappe.PermissionError):
 				doc.retry()
 		enqueue.assert_not_called()
+
+	def test_retry_marks_queued_before_running(self):
+		bp, doc = self._bp()
+		with patch.object(bp.frappe.db, "get_value", return_value="Failed"), 			 patch.object(bp.frappe, "has_permission"), 			 patch.object(bp.frappe.db, "set_value") as set_value, 			 patch.object(bp.BulkProduction, "enqueue_save_stockentry") as enqueue:
+			doc.retry()
+		set_value.assert_called_once_with("Bulk Production", "BP-1", "status", "Queued", update_modified=False)
+		enqueue.assert_called_once()
