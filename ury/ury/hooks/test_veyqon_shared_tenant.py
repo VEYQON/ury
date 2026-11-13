@@ -173,7 +173,8 @@ class TestBulkProductionStockEntries(FrappeTestCase):
 
 	def test_retry_requires_stock_entry_submit_permission(self):
 		bp, doc = self._bp()
-		with patch.object(bp.frappe, "has_permission", side_effect=frappe.PermissionError), \
+		with patch.object(bp.frappe.db, "get_value", return_value="Failed"), \
+			 patch.object(bp.frappe, "has_permission", side_effect=frappe.PermissionError), \
 			 patch.object(bp.BulkProduction, "enqueue_save_stockentry") as enqueue:
 			with self.assertRaises(frappe.PermissionError):
 				doc.retry()
