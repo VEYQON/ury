@@ -66,6 +66,11 @@ class BulkProduction(Document):
 
 	@frappe.whitelist()
 	def retry(self):
+		# VEYQON: only a submitted run that failed may be retried (a retry on a posted run
+		# duplicated every Stock Entry), and only by someone who may submit Stock Entries.
+		if self.docstatus != 1 or self.status != "Failed":
+			frappe.throw(frappe._("Only a submitted Bulk Production with status Failed can be retried."))
+		frappe.has_permission("Stock Entry", "submit", throw=True)
 		self.enqueue_save_stockentry()
 
 	def enqueue_save_stockentry(self):
@@ -120,7 +125,9 @@ class BulkProduction(Document):
 				if stock_entry_name:
 					docstatus = frappe.db.get_value("Stock Entry", stock_entry_name, "docstatus")
 					if docstatus == 1:
-						frappe.db.set_value("Stock Entry", stock_entry_name, "docstatus", 2)
+						# VEYQON: cancel through the document so stock ledger and GL entries are
+						# reversed; setting docstatus directly left both in place.
+						frappe.get_doc("Stock Entry", stock_entry_name).cancel()
 		except Exception as e:
 			frappe.log_error(
 				message=f"Error occurred while cancelling stock entry({self.name}): {str(e)}",

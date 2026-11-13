@@ -144,3 +144,36 @@ class TestPrintJobHasNoGuestAccess(FrappeTestCase):
 		with open(path, encoding="utf-8") as f:
 			roles = {p["role"] for p in json.load(f)["permissions"]}
 		self.assertNotIn("Guest", roles)
+
+
+class TestBulkProductionStockEntries(FrappeTestCase):
+	def _bp(self, **fields):
+		from ury.ury.doctype.bulk_production import bulk_production as bp
+		doc = bp.BulkProduction.__new__(bp.BulkProduction)
+		doc.__dict__.update({"name": "BP-1", "docstatus": 1, "status": "Failed", **fields})
+		return bp, doc
+
+	def test_cancel_reverses_through_the_stock_entry_document(self):
+		bp, doc = self._bp(production_items=[frappe._dict(stock_entry="STE-1")])
+		with patch.object(bp.frappe.db, "get_value", return_value=1), \
+			 patch.object(bp.frappe.db, "set_value") as set_value, \
+			 patch.object(bp.frappe, "get_doc") as get_doc:
+			doc.cancel_stock_entry()
+		get_doc.assert_called_once_with("Stock Entry", "STE-1")
+		get_doc.return_value.cancel.assert_called_once()
+		set_value.assert_not_called()
+
+	def test_retry_refused_unless_submitted_and_failed(self):
+		bp, doc = self._bp(status="Completed")
+		with patch.object(bp.BulkProduction, "enqueue_save_stockentry") as enqueue:
+			with self.assertRaises(frappe.ValidationError):
+				doc.retry()
+		enqueue.assert_not_called()
+
+	def test_retry_requires_stock_entry_submit_permission(self):
+		bp, doc = self._bp()
+		with patch.object(bp.frappe, "has_permission", side_effect=frappe.PermissionError), \
+			 patch.object(bp.BulkProduction, "enqueue_save_stockentry") as enqueue:
+			with self.assertRaises(frappe.PermissionError):
+				doc.retry()
+		enqueue.assert_not_called()
