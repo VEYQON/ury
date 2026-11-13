@@ -712,14 +712,10 @@ def clear_masters(company):
     for pos_profile in frappe.get_all("POS Profile", filters={"company": company}, pluck="name"):
         frappe.delete_doc("POS Profile", pos_profile, force=1, ignore_permissions=True)
         
-    for price_list in frappe.get_all("Price List", filters={"price_list_name": ["like", "%Demo%"]}, pluck="name"):
-        frappe.delete_doc("Price List", price_list, force=1, ignore_permissions=True)
-
-    for doctype in frappe.get_hooks("ury_demo_master_doctypes")[::-1]:
-        data = read_data_file_using_hooks(doctype)
-        if data:
-            for item in json.loads(data):
-                clear_demo_record(item, company)
+    # VEYQON shared-tenant: the site-wide "%Demo%" Price List delete and the
+    # value-matched master deletes (Item, Customer, User, Employee, Branch, Gender,
+    # Item Group, ...) can hit real records of other apps on the same site, so they
+    # are not run. Demo masters left behind are removed by hand.
 
 
 def clear_demo_record(document, company):

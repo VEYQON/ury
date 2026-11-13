@@ -28,8 +28,16 @@ def set_sales_invoice_commission_attribution(doc, method=None):
     doc.custom_closing_employee = _employee_for_user(doc.cashier) or doc.get("custom_closing_employee")
 
 
+def _is_restaurant_pos(doc):
+    """VEYQON shared-tenant: a POS Sales Invoice belongs to URY only when its POS
+    Profile is linked to a URY Restaurant; other apps' POS invoices are left alone."""
+    if not doc.get("is_pos") or not doc.get("pos_profile"):
+        return False
+    return bool(frappe.db.get_value("POS Profile", doc.pos_profile, "restaurant"))
+
+
 def validate(doc, method):
-    if doc.is_pos:
+    if _is_restaurant_pos(doc):
         doc.update_stock = 1
 
 
@@ -93,7 +101,7 @@ def round_off_journal_entry(doc, method=None):
     between rounded_total and paid_amount, posted against the POS Profile's
     configured cash discount account. Best-effort: never blocks submission."""
     try:
-        if not doc.is_pos or not flt(doc.rounded_total) or not flt(doc.paid_amount):
+        if not _is_restaurant_pos(doc) or not flt(doc.rounded_total) or not flt(doc.paid_amount):
             return
 
         diff = flt(doc.rounded_total) - flt(doc.paid_amount)

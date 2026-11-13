@@ -7,6 +7,11 @@ def validate(doc, method):
 	A Stock Reconciliation in Draft status represents work in progress for a branch.
 	Only one draft per branch is allowed at a time to prevent reconciliation conflicts.
 	"""
+	# VEYQON shared-tenant: a reconciliation without a branch is not a URY branch count;
+	# without this, every branchless draft on the site collides with every other.
+	if not doc.get("branch"):
+		return
+
 	draft_check = frappe.db.exists(
 		"Stock Reconciliation",
 		{"branch": doc.branch, "docstatus": 0}

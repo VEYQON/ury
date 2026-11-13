@@ -1,5 +1,12 @@
 // Function to remove duplicate items from a form
+// VEYQON shared-tenant: the duplicate-line rule is a restaurant purchasing
+// convention, so only URY staff get it; other apps' users keep ERPNext behaviour.
+// shortcut: gated by role, not by record; upgrade to a branch/restaurant check if
+// URY staff also raise non-restaurant purchases.
+const URY_ROLES = ["URY Admin", "URY Owner", "URY Manager", "URY Cashier", "URY Captain", "URY Sales Plan Controller"];
+
 function validate_duplicate(frm) {
+  if (!frappe.user.has_role(URY_ROLES)) return;
   let items = frm.doc.items;
   let item_map = {};
 

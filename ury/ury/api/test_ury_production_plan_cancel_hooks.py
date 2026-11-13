@@ -93,9 +93,18 @@ class TestProductionPlanCancelHooks(FrappeTestCase):
 		self.assertIn("MFG-STE-0007", str(ctx.exception))
 
 	def test_allows_with_only_unstarted_work_orders_and_warns(self):
-		doc = _FakeDoc()
+		doc = _FakeDoc(custom_ury_sales_plan="SP-0001")
 		mock_msgprint = self._before_cancel(doc, work_orders=["WO-0001", "WO-0002"], manufacture_entries=[])
 		mock_msgprint.assert_called_once()
 		message = mock_msgprint.call_args[0][0]
 		self.assertIn("WO-0001", message)
 		self.assertIn("WO-0002", message)
+
+	def test_non_ury_plan_keeps_erpnext_work_order_link_check(self):
+		"""VEYQON shared-tenant: a Production Plan from another app (no
+		custom_ury_sales_plan) must not get the Work Order waiver, so ERPNext's
+		own link check still refuses the cancel and no Work Order is orphaned."""
+		doc = _FakeDoc()
+		mock_msgprint = self._before_cancel(doc, work_orders=["WO-0001"], manufacture_entries=[])
+		self.assertNotIn("Work Order", set(doc.ignore_linked_doctypes))
+		mock_msgprint.assert_not_called()

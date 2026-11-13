@@ -1,5 +1,6 @@
 import frappe
 from frappe import _
+from frappe.utils import cstr
 
 
 def validate(doc, method):
@@ -55,8 +56,18 @@ def validate_yield_standard_permission(doc, method):
 	before = doc.get_doc_before_save()
 	for fieldname in YIELD_STANDARD_FIELDS:
 		current = doc.get(fieldname)
-		previous = before.get(fieldname) if before else None
-		if current == previous:
+		if before:
+			previous = before.get(fieldname)
+		else:
+			# VEYQON shared-tenant: a new Item arrives with the field defaults
+			# (custom_yield_check_cadence defaults to the truthy string "None"),
+			# which is not a manager change; comparing to None blocked every
+			# non-manager from creating Items.
+			df = doc.meta.get_field(fieldname)
+			previous = df.default if df else None
+			if not current:
+				continue  # an API/import sending "" or None is not setting a standard
+		if current == previous or (previous is not None and cstr(current) == cstr(previous)):
 			continue
 		if not current and not previous:
 			# Both falsy (None/0/"" vs None/0/"") -- not a meaningful change.

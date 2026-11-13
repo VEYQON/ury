@@ -112,6 +112,12 @@ def _guard_posted_production(doc):
 			frappe.ValidationError,
 		)
 
+	# VEYQON shared-tenant: only URY sales-plan Production Plans get the D6 waiver.
+	# Any other plan keeps ERPNext's refusal while submitted Work Orders link to it,
+	# so a manufacturing plan from another app is never cancelled with orphans.
+	if not doc.get("custom_ury_sales_plan"):
+		return
+
 	# Frappe's own `check_if_doc_is_linked` runs after this hook and refuses
 	# the cancel outright while any submitted Work Order links back to this
 	# plan, regardless of what this function decided. Without adding
