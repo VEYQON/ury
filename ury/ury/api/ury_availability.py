@@ -133,23 +133,21 @@ def _verify_branch_scope(user, branch, company):
 	`self_ordering.py:assign_device_table()`'s table-branch check): a user
 	is scoped to a branch via the `URY User` child table on `Branch`
 	(`tabURY User.parent == Branch.name`, `tabURY User.user == user`).
-	System Manager / URY Admin are treated as branch-agnostic staff who
-	manage availability across branches, consistent with the manager-role
-	handling in `ury_kot_item_execution_service.py`.
+	System Manager is treated as branch-agnostic (VEYQON: GF-7 -- URY Admin
+	no longer is).
 	"""
 	if not branch or not company:
 		frappe.throw(_("Branch and company are required"), frappe.ValidationError)
 
-	if user == "Administrator":
-		return
-
-	roles = set(frappe.get_roles(user))
-	if roles & {"System Manager", "URY Admin"}:
-		return
-
+	# VEYQON: GF-7 -- the branch must belong to the company for everyone (admins too), and a
+	# branch without a company fails closed. Only Administrator / System Manager skip the
+	# URY User assignment (URY Admin is a URY role like any other: it needs the row).
 	branch_company = frappe.db.get_value("Branch", branch, "company")
-	if branch_company and branch_company != company:
+	if not branch_company or branch_company != company:
 		frappe.throw(_("Branch does not belong to the given company"), frappe.PermissionError)
+
+	if user == "Administrator" or "System Manager" in frappe.get_roles(user):
+		return
 
 	assigned = frappe.db.exists("URY User", {"parenttype": "Branch", "parent": branch, "user": user})
 	if not assigned:

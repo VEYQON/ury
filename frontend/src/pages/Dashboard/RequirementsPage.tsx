@@ -189,7 +189,7 @@ export const RequirementsPage: React.FC = () => {
           items.push({ item_code: row.component_item, department: row.department });
         });
 
-        const stockResults = await departmentStockService.getPlanStockOnHand(activeBranchId, items);
+        const stockResults = await departmentStockService.getPlanStockOnHand(activeBranchId, items, planName);
         if (cancelled) return;
 
         const stockMap = new Map();
@@ -206,7 +206,7 @@ export const RequirementsPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [activeBranchId, demandVector]);
+  }, [activeBranchId, demandVector, planName]);
 
   const departmentCount = useMemo(
     () => new Set(demandVector.map((row) => row.department).filter(Boolean)).size,

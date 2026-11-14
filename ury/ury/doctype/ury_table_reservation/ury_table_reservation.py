@@ -7,7 +7,23 @@ from frappe import _
 from frappe.utils import now_datetime, get_datetime
 
 
+# VEYQON: Phase 9 -- reservation boards refetch on this event. Doctype room (joined via a
+# read-checked doctype_subscribe), same convention as KOT_REALTIME_ROOM; no customer PII.
+RESERVATION_REALTIME_ROOM = "doctype:URY Table Reservation"
+
+
 class URYTableReservation(Document):
+    def publish_reservation_update(self, deleted=False):
+        frappe.publish_realtime(
+            "table_reservation_updated",
+            {"name": self.name, "branch": self.branch, "status": self.status, "reserved_table": self.reserved_table, "deleted": deleted},
+            room=RESERVATION_REALTIME_ROOM,
+            after_commit=True,
+        )
+
+    def on_trash(self):
+        self.publish_reservation_update(deleted=True)
+
     def validate(self):
         self.set_defaults()
         self.validate_mandatory_fields()
@@ -106,6 +122,8 @@ class URYTableReservation(Document):
             )
 
     def on_update(self):
+        # Frappe runs on_update after insert too, so this one publish covers new reservations.
+        self.publish_reservation_update()
         old_doc = self.get_doc_before_save()
         old_status = old_doc.status if old_doc else None
         if self.status == "Completed" and old_status != "Completed" and self.reserved_table:

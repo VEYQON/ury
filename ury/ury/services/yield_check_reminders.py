@@ -131,6 +131,11 @@ def get_due_yield_checks_api(branch):
 	Returns:
 		list of due items (same structure as get_due_yield_checks).
 	"""
+	# VEYQON: GF-5 -- the caller's URY User branch only (the cron calls get_due_yield_checks directly).
+	require_manager()
+	from ury.ury_pos.api import assert_user_branch
+
+	assert_user_branch(branch)
 	return get_due_yield_checks(branch)
 
 

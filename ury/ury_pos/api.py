@@ -175,12 +175,16 @@ def assert_user_branch(branch, message=None):
         return
     if not branch:
         frappe.throw(message or _("Not permitted outside your branch."), frappe.PermissionError)
-    # getBranch() first: the common single-branch case, and it throws its own "not associated
-    # with any Branch" error for users without a URY User row.
-    if branch == getBranch():
+    # VEYQON: review M3 — not getBranch(): it throws a ValidationError for users without a
+    # URY User row (owners/admins/managers), which the UI cannot tell apart from a bad request.
+    branches = user_branches()  # VEYQON: review fix #4 — multi-branch users
+    if branch in branches:
         return
-    if branch not in user_branches():  # VEYQON: review fix #4 — multi-branch users
-        frappe.throw(message or _("Not permitted outside your branch."), frappe.PermissionError)
+    not_assigned = _(
+        "You are not assigned to branch {0}. Ask an administrator to add you as a URY User on that Branch."
+    ).format(branch)
+    # No URY User row at all: the caller's message ("another branch") would mislead.
+    frappe.throw((message if branches else None) or not_assigned, frappe.PermissionError)
 
 
 def has_pos_profile_role(pos_profiles, fields=("role_allowed_for_billing",)):

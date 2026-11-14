@@ -443,13 +443,15 @@ export const departmentStockService = {
   async getPlanStockOnHand(
     branch: string,
     items: Array<{ item_code: string; department?: string }>,
+    plan: string | null,
   ): Promise<PlanStockOnHand[]> {
-    if (!branch || branch === 'all' || !items || items.length === 0) {
+    if (!branch || branch === 'all' || !plan || !items || items.length === 0) {
       return [];
     }
+    // VEYQON: GF-6 -- the server derives the item pairs from the plan's frozen snapshot.
     const res = await call.post<any>('ury.ury.api.ury_requirements_stock.get_plan_stock_on_hand', {
+      plan,
       branch,
-      items: JSON.stringify(items),
     });
     const result = (res as any)?.message ?? res;
     return Array.isArray(result) ? result : [];

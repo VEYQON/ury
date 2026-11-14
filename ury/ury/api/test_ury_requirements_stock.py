@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
-from ury.ury.api.ury_requirements_stock import get_plan_stock_on_hand
+from ury.ury.api.ury_requirements_stock import _stock_for_items, get_plan_stock_on_hand  # VEYQON: GF-6
 
 MODULE = "ury.ury.api.ury_requirements_stock"
 
@@ -22,23 +22,23 @@ class TestGetPlanStockOnHandGuards(FrappeTestCase):
 	def test_requires_manager(self, mock_require_manager):
 		mock_require_manager.side_effect = frappe.PermissionError
 		with self.assertRaises(frappe.PermissionError):
-			get_plan_stock_on_hand(branch="Branch1", items=[])
+			get_plan_stock_on_hand(plan="PLAN-1")
 		mock_require_manager.assert_called_once()
 
 	@patch(f"{MODULE}.require_manager")
 	def test_returns_empty_when_branch_missing(self, mock_require_manager):
-		self.assertEqual(get_plan_stock_on_hand(branch=None, items=[]), [])
+		self.assertEqual(_stock_for_items(branch=None, items=[]), [])
 
 	@patch(f"{MODULE}.require_manager")
 	def test_returns_empty_when_branch_is_all(self, mock_require_manager):
-		self.assertEqual(get_plan_stock_on_hand(branch="all", items=[]), [])
+		self.assertEqual(_stock_for_items(branch="all", items=[]), [])
 
 	@patch(f"{MODULE}.frappe.db.get_value")
 	@patch(f"{MODULE}.require_manager")
 	def test_returns_empty_when_no_pos_profile_warehouse(self, mock_require_manager, mock_get_value):
 		mock_get_value.return_value = None
 		self.assertEqual(
-			get_plan_stock_on_hand(branch="Branch1", items=[{"item_code": "ITEM-1"}]), []
+			_stock_for_items(branch="Branch1", items=[{"item_code": "ITEM-1"}]), []
 		)
 
 	@patch(f"{MODULE}.frappe.db.get_value")
@@ -46,7 +46,7 @@ class TestGetPlanStockOnHandGuards(FrappeTestCase):
 	def test_returns_empty_when_pos_profile_missing_company(self, mock_require_manager, mock_get_value):
 		mock_get_value.return_value = frappe._dict({"warehouse": "WH-1", "company": None})
 		self.assertEqual(
-			get_plan_stock_on_hand(branch="Branch1", items=[{"item_code": "ITEM-1"}]), []
+			_stock_for_items(branch="Branch1", items=[{"item_code": "ITEM-1"}]), []
 		)
 
 
@@ -91,7 +91,7 @@ class TestGetPlanStockOnHandResolution(FrappeTestCase):
 		}
 
 		items = [{"item_code": "ITEM-1", "department": "Kitchen"}]
-		result = get_plan_stock_on_hand(branch="Branch1", items=items)
+		result = _stock_for_items(branch="Branch1", items=items)
 
 		self.assertEqual(len(result), 1)
 		row = result[0]
@@ -123,7 +123,7 @@ class TestGetPlanStockOnHandResolution(FrappeTestCase):
 		}
 
 		items = [{"item_code": "ITEM-2", "department": "Bar"}]
-		result = get_plan_stock_on_hand(branch="Branch1", items=items)
+		result = _stock_for_items(branch="Branch1", items=items)
 
 		self.assertEqual(result[0]["warehouse"], "WH-CENTRAL")
 		self.assertEqual(result[0]["resolved_from"], "pos_profile")
@@ -148,7 +148,7 @@ class TestGetPlanStockOnHandResolution(FrappeTestCase):
 		}
 
 		items = [{"item_code": "ITEM-3"}]
-		result = get_plan_stock_on_hand(branch="Branch1", items=items)
+		result = _stock_for_items(branch="Branch1", items=items)
 
 		self.assertEqual(result[0]["warehouse"], "WH-CENTRAL")
 		self.assertEqual(result[0]["resolved_from"], "pos_profile")
@@ -161,7 +161,7 @@ class TestGetPlanStockOnHandResolution(FrappeTestCase):
 		mock_get_value.return_value = frappe._dict({"warehouse": "WH-1", "company": "Co"})
 		mock_get_all.return_value = []
 
-		result = get_plan_stock_on_hand(branch="Branch1", items=[{"department": "Kitchen"}])
+		result = _stock_for_items(branch="Branch1", items=[{"department": "Kitchen"}])
 		self.assertEqual(result, [])
 
 	@patch(f"{MODULE}.frappe.get_all")
@@ -173,7 +173,7 @@ class TestGetPlanStockOnHandResolution(FrappeTestCase):
 
 		# With no POS profile warehouse, fails closed to [] regardless of items --
 		# this exercises the parse_json(items) code path without needing stock mocks.
-		result = get_plan_stock_on_hand(
+		result = _stock_for_items(
 			branch="Branch1", items=json.dumps([{"item_code": "ITEM-1"}])
 		)
 		self.assertEqual(result, [])
@@ -185,7 +185,7 @@ class TestGetPlanStockOnHandResolution(FrappeTestCase):
 		mock_get_value.return_value = frappe._dict({"warehouse": "WH-1", "company": "Co"})
 		mock_get_all.return_value = []
 
-		self.assertEqual(get_plan_stock_on_hand(branch="Branch1", items=None), [])
+		self.assertEqual(_stock_for_items(branch="Branch1", items=None), [])
 
 	@patch(f"{MODULE}.frappe.cache")
 	@patch(f"{MODULE}.get_allocatable_qty")
@@ -211,7 +211,7 @@ class TestGetPlanStockOnHandResolution(FrappeTestCase):
 		mock_cache.return_value = cache_backend
 
 		items = [{"item_code": "ITEM-CACHE"}]
-		result = get_plan_stock_on_hand(branch="Branch1", items=items)
+		result = _stock_for_items(branch="Branch1", items=items)
 
 		cache_backend.set_value.assert_called_once()
 		args, kwargs = cache_backend.set_value.call_args
@@ -237,7 +237,7 @@ class TestGetPlanStockOnHandResolution(FrappeTestCase):
 		cache_backend.get_value.return_value = cached_payload
 		mock_cache.return_value = cache_backend
 
-		result = get_plan_stock_on_hand(branch="Branch1", items=[{"item_code": "ITEM-CACHED"}])
+		result = _stock_for_items(branch="Branch1", items=[{"item_code": "ITEM-CACHED"}])
 
 		self.assertEqual(result, cached_payload)
 		mock_get_allocatable_qty.assert_not_called()
@@ -258,7 +258,7 @@ class TestGetPlanStockOnHandResolution(FrappeTestCase):
 		mock_get_allocatable_qty.return_value = {}
 
 		items = [{"item_code": "ITEM-NOVAL"}]
-		result = get_plan_stock_on_hand(branch="Branch1", items=items)
+		result = _stock_for_items(branch="Branch1", items=items)
 
 		self.assertEqual(result[0]["valuation_rate"], 0.0)
 		self.assertEqual(result[0]["actual_qty"], 0)

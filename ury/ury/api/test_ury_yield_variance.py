@@ -228,6 +228,12 @@ class TestRecordYieldCheckPermissionGating(FrappeTestCase):
 class TestGetYieldVariancePermissionGating(FrappeTestCase):
 	"""Test get_yield_variance permission and scope gating."""
 
+	def setUp(self):
+		# VEYQON: GF-5 branch/company scope is covered by test_veyqon_gapfill_safety.py.
+		p = patch(f"{MOD}._require_report_scope")
+		p.start()
+		self.addCleanup(p.stop)
+
 	@patch(f"{MOD}.require_manager")
 	@patch(f"{MOD}._require_scope")
 	def test_require_manager_called(self, mock_scope, mock_manager):
@@ -332,6 +338,12 @@ class TestGetYieldVariancePermissionGating(FrappeTestCase):
 
 class TestGetYieldCheckCompliancePermissionGating(FrappeTestCase):
 	"""Test get_yield_check_compliance permission and scope gating."""
+
+	def setUp(self):
+		# VEYQON: GF-5 branch/company scope is covered by test_veyqon_gapfill_safety.py.
+		p = patch(f"{MOD}._require_report_scope")
+		p.start()
+		self.addCleanup(p.stop)
 
 	@patch(f"{MOD}.require_manager")
 	@patch(f"{MOD}._require_scope")

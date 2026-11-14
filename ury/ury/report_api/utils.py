@@ -1,5 +1,7 @@
 import frappe
 
+from ury.ury_pos.api import assert_user_branch, is_pos_superuser, user_branches
+
 
 def require_manager():
 	"""Raise frappe.PermissionError unless the current user is a URY Manager,
@@ -40,6 +42,28 @@ def require_dashboard_user():
 			"You do not have permission to access this resource.",
 			frappe.PermissionError,
 		)
+
+
+def require_dashboard_branch(branch):
+	"""VEYQON: Phase 9 (R1, RS-4) — dashboard role plus one of the user's URY branches.
+
+	Administrator / System Manager may omit `branch` to aggregate the site.
+	"""
+	require_dashboard_user()
+	assert_user_branch(branch)
+
+
+def user_companies():
+	"""VEYQON: Phase 9 (RS-2, RS-3) — companies of the session user's URY branches.
+
+	None means no limit (Administrator / System Manager). An empty list means none.
+	"""
+	if is_pos_superuser():
+		return None
+	branches = user_branches()
+	if not branches:
+		return []
+	return sorted({c for c in frappe.get_all("Branch", filters={"name": ["in", branches]}, pluck="company") if c})
 
 
 def user_has_branch_access(user, branch):

@@ -19,6 +19,7 @@ def _get_all_by_doctype(fulfilment_rows):
 
 
 class TestDayCloseFulfilmentBlocker(unittest.TestCase):
+	@patch("ury.ury.report_api.day_close.assert_user_branch", new=lambda *a, **k: None)  # VEYQON: GF-4
 	@patch("ury.ury.report_api.day_close.require_manager")
 	@patch("ury.ury.report_api.day_close.frappe.get_all")
 	@patch("ury.ury.report_api.day_close.frappe.db.get_value", return_value="URY Co")
@@ -32,6 +33,7 @@ class TestDayCloseFulfilmentBlocker(unittest.TestCase):
 		self.assertTrue(item["blocking"])
 		self.assertEqual(item["count"], 1)
 
+	@patch("ury.ury.report_api.day_close.assert_user_branch", new=lambda *a, **k: None)  # VEYQON: GF-4
 	@patch("ury.ury.report_api.day_close.require_manager")
 	@patch("ury.ury.report_api.day_close.frappe.get_all")
 	@patch("ury.ury.report_api.day_close.frappe.db.get_value", return_value="URY Co")

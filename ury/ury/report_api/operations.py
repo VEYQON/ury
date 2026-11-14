@@ -1,6 +1,6 @@
 import frappe
 
-from ury.ury.report_api.utils import require_manager, validate_date_range
+from ury.ury.report_api.utils import require_manager, user_companies, validate_date_range
 
 
 @frappe.whitelist()
@@ -20,9 +20,14 @@ def get_completed_work_orders(start_date, end_date):
 	"""
 	require_manager()
 	validate_date_range(start_date, end_date)
+	# VEYQON: Phase 9 RS-2 — Work Order read, and only the companies of the user's branches
+	if not frappe.has_permission("Work Order", "read"):
+		frappe.throw("Not permitted to read Work Orders.", frappe.PermissionError)
+	companies = user_companies()
+	company_pred = "AND `company` IN %(companies)s" if companies is not None else ""
 
-	rows = frappe.db.sql(
-		"""
+	rows = [] if companies == [] else frappe.db.sql(
+		f"""
 		SELECT
 			`name` AS name,
 			`production_item` AS production_item,
@@ -38,9 +43,10 @@ def get_completed_work_orders(start_date, end_date):
 			-- would compare it to midnight and drop everything completed later
 			-- that day. Compare on the date part only.
 			AND DATE(COALESCE(`actual_end_date`, `planned_end_date`)) BETWEEN %(start_date)s AND %(end_date)s
+			{company_pred}
 		ORDER BY COALESCE(`actual_end_date`, `planned_end_date`) DESC
 		""",
-		{"start_date": start_date, "end_date": end_date},
+		{"start_date": start_date, "end_date": end_date, "companies": companies},
 		as_dict=True,
 	)
 

@@ -56,9 +56,9 @@ posted_gross_profit / variance. It is never a zero.
     Department manager          -> their own department only; requesting a
                                     different department fails closed with
                                     DEPARTMENT_SCOPE_MISMATCH.
-    URY Manager                 -> their own branch only; another branch
-                                    fails closed (frappe.PermissionError).
-    Finance / System Manager    -> full drill-down, all fields, all branches
+    URY Manager / Admin / Owner -> their URY User branch(es) only; another branch
+    / Manager / Production Mgr      fails closed (frappe.PermissionError).
+    System Manager              -> full drill-down, all fields, all branches
                                     within the requested company/branch.
 """
 
@@ -67,6 +67,7 @@ from frappe import _
 
 from ury.ury.api.ury_cost_variance_attribution import compute_variance
 from ury.ury.api.ury_profitability_posted_cost import load_posted_costs
+from ury.ury_pos.api import assert_user_branch  # VEYQON: GF-2 / GF-3
 
 
 SALES_PLAN_DOCTYPE = "URY Sales Plan"
@@ -90,7 +91,8 @@ MISSING_COST_ATTRIBUTION = "MISSING_COST_ATTRIBUTION"
 NO_ACCESS_ROLES = {"URY Cashier", "URY Captain"}
 QUANTITY_ONLY_ROLES = {"Chef", "URY Chef", "Production", "URY Production"}
 DEPARTMENT_MANAGER_ROLES = {"Department Manager", "URY Department Manager"}
-BRANCH_MANAGER_ROLES = {"URY Manager"}
+# VEYQON: GF-2 -- every require_manager / URY management role; scoped by URY User branch below.
+BRANCH_MANAGER_ROLES = {"URY Manager", "URY Admin", "URY Owner", "Production Manager", "Manager"}
 # VEYQON: GF-1 -- only System Manager. URY ships no Finance / Inventory Manager roles; on a
 # shared tenant those names belong to other apps and must not unlock every branch's GP.
 FULL_ACCESS_ROLES = {"System Manager"}
@@ -313,42 +315,40 @@ def _resolve_access(company, branch, department):
     if roles & FULL_ACCESS_ROLES or is_admin:
         return "full", False, department
 
+    # VEYQON: GF-2 / GF-3 -- every non-full tier is scoped by the caller's URY User branch
+    # assignment (as everywhere else in URY), not HR Employee.branch.
+    granting = BRANCH_MANAGER_ROLES | DEPARTMENT_MANAGER_ROLES | QUANTITY_ONLY_ROLES
+    if roles & granting:
+        assert_user_branch(
+            branch,
+            _("You may only view profitability for your assigned branch ({0})").format(DEPARTMENT_SCOPE_MISMATCH),
+        )
+
     if roles & BRANCH_MANAGER_ROLES:
-        assigned_branch = frappe.db.get_value("Employee", {"user_id": frappe.session.user}, "branch")
-        if not assigned_branch or assigned_branch != branch:
-            frappe.throw(
-                _("URY Manager may only view profitability for their assigned branch ({0})").format(
-                    DEPARTMENT_SCOPE_MISMATCH
-                ),
-                frappe.PermissionError,
-            )
         return "branch_manager", False, department
 
     if roles & DEPARTMENT_MANAGER_ROLES:
-        assigned = frappe.db.get_value(
-            "Employee", {"user_id": frappe.session.user}, ["branch", "department"], as_dict=True
+        # VEYQON: GF-3 -- plan departments are URY Production Department names; the manager is
+        # URY Production Department.department_manager, not HR Employee.department.
+        managed = frappe.get_all(
+            "URY Production Department",
+            filters={"branch": branch, "department_manager": frappe.session.user, "enabled": 1},
+            pluck="name",
         )
-        assigned_branch = assigned.get("branch") if assigned else None
-        assigned_department = assigned.get("department") if assigned else None
-        if not assigned_branch or assigned_branch != branch:
-            frappe.throw(
-                _(
-                    "Department manager may only view profitability for their assigned branch ({0})"
-                ).format(DEPARTMENT_SCOPE_MISMATCH),
-                frappe.PermissionError,
-            )
-        if not assigned_department:
+        if not managed:
             frappe.throw(
                 _("No department assigned ({0})").format(MISSING_DEPARTMENT), frappe.ValidationError
             )
-        if department and department != assigned_department:
+        if department and department not in managed:
             frappe.throw(
-                _("Department {0} does not match your assigned department {1} ({2})").format(
-                    department, assigned_department, DEPARTMENT_SCOPE_MISMATCH
-                ),
+                _("Department {0} is not one you manage ({1})").format(department, DEPARTMENT_SCOPE_MISMATCH),
                 frappe.ValidationError,
             )
-        return "department_manager", False, assigned_department
+        if not department and len(managed) > 1:
+            frappe.throw(
+                _("Pick one of your departments ({0})").format(MISSING_DEPARTMENT), frappe.ValidationError
+            )
+        return "department_manager", False, department or managed[0]
 
     if roles & QUANTITY_ONLY_ROLES:
         return "quantity_only", True, department

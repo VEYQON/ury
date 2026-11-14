@@ -931,9 +931,16 @@ class TestRequestBill(unittest.TestCase):
         self.assertEqual(result["request"], "SR-EXISTING")
 
 
-# VEYQON: S9-24 -- no open Payment Request to reuse in these cases.
+# VEYQON: S9-24 -- no open Payment Request to reuse in these cases (H2: no pending terminal payment).
+@patch(f"{MOD}.frappe.db.exists", new=lambda *a, **k: None)
 @patch(f"{MOD}.frappe.db.get_value", new=lambda *a, **k: None)
 class TestCreatePaymentRequest(unittest.TestCase):
+    def setUp(self):
+        # VEYQON: S9-25 -- online payment needs the settlement webhook secret configured.
+        p = patch(f"{MOD}.frappe.conf", {"ury_payment_webhook_secret": "s"}, create=True)
+        p.start()
+        self.addCleanup(p.stop)
+
     @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")
     @patch(f"{MOD}.frappe.get_doc")
     @patch(f"{MOD}._resolve_session")

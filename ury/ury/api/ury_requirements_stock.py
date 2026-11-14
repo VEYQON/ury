@@ -25,10 +25,39 @@ from frappe.utils import parse_json
 
 from ury.ury.api.ury_inventory_projection import get_allocatable_qty
 from ury.ury.report_api.utils import require_manager
+from ury.ury_pos.api import assert_user_branch  # VEYQON: GF-6
 
 
 @frappe.whitelist(methods=["GET", "POST"])
-def get_plan_stock_on_hand(branch=None, items=None):
+def get_plan_stock_on_hand(plan=None, branch=None):
+	"""VEYQON: GF-6 -- stock on hand for one Sales Plan's frozen component demand.
+
+	The (item_code, department) pairs come from the plan's `approval_snapshot.demand_vector`,
+	never from the client. The caller needs read on the plan and a URY User row on its branch;
+	`branch`, when sent, must be the plan's branch.
+	"""
+	require_manager()
+	if not plan:
+		frappe.throw(frappe._("Sales Plan is required"), frappe.ValidationError)
+	doc = frappe.db.get_value(
+		"URY Sales Plan", plan, ["branch", "company", "approval_snapshot"], as_dict=True
+	)
+	if not doc or not frappe.has_permission("URY Sales Plan", "read", doc=plan):
+		frappe.throw(frappe._("Not permitted to read this Sales Plan"), frappe.PermissionError)
+	if branch and branch != doc.branch:
+		frappe.throw(frappe._("Branch does not match the Sales Plan"), frappe.ValidationError)
+	assert_user_branch(doc.branch)
+
+	snapshot = parse_json(doc.approval_snapshot) if doc.approval_snapshot else {}
+	pairs = []
+	for row in (snapshot or {}).get("demand_vector") or []:
+		pair = {"item_code": row.get("component_item"), "department": row.get("department")}
+		if pair["item_code"] and pair not in pairs:
+			pairs.append(pair)
+	return _stock_for_items(doc.branch, pairs, doc.company)
+
+
+def _stock_for_items(branch=None, items=None, company=None):
 	"""Return stock-on-hand data for a list of items, grouped by department.
 
 	Args:
@@ -54,9 +83,6 @@ def get_plan_stock_on_hand(branch=None, items=None):
 	Raises:
 		frappe.PermissionError: if user is not a manager (via require_manager)
 	"""
-	# Security: every manager-scoped endpoint must call require_manager first
-	require_manager()
-
 	# Fail closed if branch is missing or "all" -- mirror RequirementsPage.tsx:105-113
 	if not branch or branch == "all":
 		return []
@@ -70,20 +96,25 @@ def get_plan_stock_on_hand(branch=None, items=None):
 	items_digest = hashlib.sha256(
 		json.dumps(items, sort_keys=True, default=str).encode("utf-8")
 	).hexdigest()
-	cache_key = f"ury_requirements_stock:{branch}:{items_digest}"
+	cache_key = f"ury_requirements_stock:{branch}:{company}:{items_digest}"
 	cached = frappe.cache().get_value(cache_key)
 	if cached:
 		return cached
 
 	# Resolve the central/POS-Profile warehouse for this branch
+	# VEYQON: GF-6 -- deterministic profile: enabled, of the plan's company, first by name.
+	profile_filters = {"branch": branch, "disabled": 0}
+	if company:
+		profile_filters["company"] = company
 	pos_profile_data = frappe.db.get_value(
 		"POS Profile",
-		{"branch": branch},
+		profile_filters,
 		["warehouse", "company"],
 		as_dict=True,
+		order_by="name asc",
 	)
 	pos_warehouse = pos_profile_data.get("warehouse") if pos_profile_data else None
-	company = pos_profile_data.get("company") if pos_profile_data else None
+	company = company or (pos_profile_data.get("company") if pos_profile_data else None)
 
 	# Fail closed only if branch has no company configured.
 	# POS Profile warehouse is optional (items can use department warehouses).

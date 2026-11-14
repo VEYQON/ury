@@ -4,6 +4,7 @@ from frappe import _
 from frappe.utils import get_datetime, datetime, add_to_date, today
 
 from ury.ury_pos.api import getBranch
+from ury.ury.report_api.utils import require_dashboard_branch
 
 
 def _has_dashboard_cross_branch_access():
@@ -315,6 +316,7 @@ def resolve_scope_currency(branch=None, company=None):
 
 @frappe.whitelist(methods=["GET"])
 def get_dashboard_stats(branch=None, company=None):
+	require_dashboard_branch(branch)  # VEYQON: Phase 9 R1
 	cache_key = f"ury_dashboard_stats:{branch}:{company}"
 	cached = frappe.cache().get_value(cache_key)
 	if cached:
@@ -419,6 +421,7 @@ def get_cancelled_invoices_count(branch=None):
 	manager-gated). This is a plain today-only count, same access level as
 	the rest of ury_dashboard.py's stats.
 	"""
+	require_dashboard_branch(branch)  # VEYQON: Phase 9 R1
 	cache_key = f"ury_dashboard_cancelled_invoices_count:{branch}"
 	cached = frappe.cache().get_value(cache_key)
 	if cached is not None:
@@ -436,6 +439,7 @@ def get_cancelled_invoices_count(branch=None):
 
 @frappe.whitelist(methods=["GET"])
 def get_needs_attention(branch=None):
+	require_dashboard_branch(branch)  # VEYQON: Phase 9 R1
 	cache_key = f"ury_dashboard_needs_attention:{branch}"
 	cached = frappe.cache().get_value(cache_key)
 	if cached:
@@ -539,6 +543,7 @@ MAX_TICKET_SECONDS = 6 * 60 * 60
 
 @frappe.whitelist(methods=["GET"])
 def get_shift_metrics(branch=None):
+	require_dashboard_branch(branch)  # VEYQON: Phase 9 R1
 	cache_key = f"ury_dashboard_shift_metrics:{branch}"
 	cached = frappe.cache().get_value(cache_key)
 	if cached:
@@ -636,6 +641,7 @@ def get_department_activity(branch=None, company=None):
 	Quantities across departments can mix stock UOMs when summed (same
 	precedent as `get_completed_work_orders`'s `total_qty_produced`).
 	"""
+	require_dashboard_branch(branch)  # VEYQON: Phase 9 R1
 	cache_key = f"ury_dashboard_department_activity:{branch}:{company}"
 	cached = frappe.cache().get_value(cache_key)
 	if cached:
@@ -722,6 +728,7 @@ def get_department_activity(branch=None, company=None):
 
 @frappe.whitelist(methods=["GET"])
 def get_baseline(branch=None, weeks=6):
+	require_dashboard_branch(branch)  # VEYQON: Phase 9 R1
 	weekday = get_datetime().weekday()
 	hour = get_datetime().hour
 	cache_key = f"ury_dashboard_baseline:{branch}:{weekday}:{hour}"
@@ -790,6 +797,7 @@ def get_baseline_comparison(branch=None, window="today", weeks=6):
 	as a param so the frontend contract doesn't need to change if narrower
 	windows are added later.
 	"""
+	require_dashboard_branch(branch)  # VEYQON: Phase 9 R1
 	weeks = int(weeks)
 	cache_key = f"ury_dashboard_baseline_comparison:{branch}:{window}:{weeks}"
 	cached = frappe.cache().get_value(cache_key)
@@ -895,6 +903,7 @@ def get_baseline_comparison(branch=None, window="today", weeks=6):
 
 @frappe.whitelist(methods=["GET"])
 def get_floor_load(branch=None):
+	require_dashboard_branch(branch)  # VEYQON: Phase 9 R1
 	cache_key = f"ury_dashboard_floor_load:{branch}"
 	cached = frappe.cache().get_value(cache_key)
 	if cached:

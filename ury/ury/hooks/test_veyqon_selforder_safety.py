@@ -262,7 +262,10 @@ class TestPaymentRequestReuse(_Throttled):
 		docs = {"URY Self Ordering Profile": profile, "POS Invoice": invoice, "Payment Request": pr}
 		make = MagicMock()
 		with patch(f"{SO}._resolve_session", return_value=sess), patch(f"{SO}.frappe.get_doc", side_effect=lambda dt, n=None: docs[dt]), \
-			patch(f"{SO}.frappe.db.get_value", return_value="PR-1") as gv, patch(f"{SO}.frappe.set_user", create=True), \
+			patch(f"{SO}.frappe.db.get_value", side_effect=["INV-1", None, "PR-1"]) as gv, patch(f"{SO}.frappe.set_user", create=True), \
+			patch(f"{SO}.frappe.get_all", side_effect=lambda dt, **k: ["PR-1"] if dt == "Payment Request" else []), \
+			patch(f"{SO}.frappe.db.exists", return_value=None), \
+			patch(f"{SO}.frappe.conf", {self_ordering.PAYMENT_WEBHOOK_SECRET_KEY: "s"}, create=True), \
 			patch(f"{SO}.frappe.session", SimpleNamespace(user="Guest"), create=True), \
 			patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request", make):
 			result = self_ordering.create_payment_request("tok")
@@ -337,7 +340,8 @@ class TestDepartmentProfitabilityAccess(FrappeTestCase):
 
 	def _access(self, roles, user="u@x.test"):
 		with patch(f"{self.DP}.frappe.get_roles", return_value=roles), \
-			patch(f"{self.DP}.frappe.session", SimpleNamespace(user=user), create=True):
+			patch(f"{self.DP}.frappe.session", SimpleNamespace(user=user), create=True), \
+			patch("ury.ury_pos.api.getBranch", return_value="B1"):  # VEYQON: GF-2 URY User branch
 			return dept._resolve_access("C1", "B1", None)
 
 	def test_unshipped_generic_roles_denied(self):

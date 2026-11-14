@@ -2,6 +2,7 @@ import frappe
 from frappe.utils import add_days, getdate
 
 from ury.ury.report_api.utils import require_manager
+from ury.ury_pos.api import assert_user_branch  # VEYQON: GF-4
 
 
 @frappe.whitelist(methods=["GET"])
@@ -42,6 +43,11 @@ def get_close_day_checklist(branch, service_date):
 		frappe.throw("service_date is required")
 
 	service_date = getdate(service_date)
+	# VEYQON: GF-4 -- the caller's URY User branch only, and the branch's company scopes every count.
+	assert_user_branch(branch)
+	company = frappe.db.get_value("Branch", branch, "company")
+	if not company:
+		frappe.throw("Branch has no company", frappe.ValidationError)
 
 	open_tables = frappe.db.count("URY Table", {"branch": branch, "occupied": 1})
 
@@ -50,6 +56,7 @@ def get_close_day_checklist(branch, service_date):
 		{
 			"docstatus": 1,
 			"status": ["not in", ["Completed", "Stopped", "Cancelled"]],
+			"company": company,  # VEYQON: GF-4 -- never other companies' manufacturing
 		},
 	)
 
@@ -76,7 +83,7 @@ def get_close_day_checklist(branch, service_date):
 		"URY Fulfilment Record",
 		filters={
 			"branch": branch,
-			"company": frappe.db.get_value("Branch", branch, "company"),
+			"company": company,
 			"fulfilled_at": ["between", [service_date, add_days(service_date, 1)]],
 		},
 		fields=["name", "posted_to_erpnext", "posting_reference"],
@@ -87,7 +94,7 @@ def get_close_day_checklist(branch, service_date):
 		"URY Fulfilment Posting Intent",
 		filters={
 			"branch": branch,
-			"company": frappe.db.get_value("Branch", branch, "company"),
+			"company": company,
 			"ready_at": ["between", [service_date, add_days(service_date, 1)]],
 			"status": ["in", ["PENDING", "POSTING", "FAILED"]],
 		},
@@ -97,7 +104,7 @@ def get_close_day_checklist(branch, service_date):
 		"URY Stock Reservation",
 		filters={
 			"branch": branch,
-			"company": frappe.db.get_value("Branch", branch, "company"),
+			"company": company,
 			"creation": ["<", add_days(service_date, 1)],
 			"status": "Reserved",
 		},
@@ -116,7 +123,7 @@ def get_close_day_checklist(branch, service_date):
 			"label": "Unposted production (Work Orders)",
 			"count": unposted_production,
 			"blocking": unposted_production > 0,
-			"scope_note": "company-wide -- Work Order has no branch field",
+			"scope_note": "every branch of this company -- Work Order has no branch field",
 		},
 		{
 			"key": "closing_counts",

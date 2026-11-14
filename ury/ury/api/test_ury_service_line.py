@@ -303,7 +303,7 @@ class TestGetRunningLow(FrappeTestCase):
         self.assertEqual(first_item["remaining"], 0)
 
     @patch("ury.ury.api.ury_service_line.frappe.cache")
-    @patch("ury.ury.api.ury_service_line.frappe.db.get_value")
+    @patch("ury.ury.api.ury_service_line.frappe.get_all")  # VEYQON: Phase 9 RS-4
     @patch("ury.ury.api.ury_service_line.frappe.db.sql")
     @patch("ury.ury.api.ury_service_line.get_datetime")
     @patch("ury.ury.api.ury_service_line.today")
@@ -326,7 +326,9 @@ class TestGetRunningLow(FrappeTestCase):
         # truthy, not on whether any items sold — it always fires once here
         # since branch="URY Branch". The per-item Bin lookup inside the sold
         # items loop is what's skipped when there's nothing sold.
-        mock_get_value.assert_called_once_with("POS Profile", {"branch": "URY Branch"}, "warehouse")
+        mock_get_value.assert_called_once_with(  # VEYQON: Phase 9 RS-4 — enabled profile, first by name
+            "POS Profile", filters={"branch": "URY Branch", "disabled": 0}, fields=["warehouse"], order_by="name asc", limit=1
+        )
 
     @patch("ury.ury.api.ury_service_line._bin_actual_qty")
     @patch("ury.ury.api.ury_service_line.frappe.cache")
@@ -422,12 +424,14 @@ class TestServiceLineRealPermissionBoundary(FrappeTestCase):
 		with self.assertRaises(frappe.PermissionError):
 			get_running_low()
 
-	def test_get_service_line_allows_cashier_user(self):
+	# VEYQON: Phase 9 RS-4 — a cashier must name one of their branches; branch-allowed paths
+	# are covered in ury/ury/hooks/test_veyqon_reports_safety.py.
+	def test_get_service_line_cashier_needs_branch(self):
 		frappe.set_user(self.cashier_user)
-		result = get_service_line()
-		self.assertIsInstance(result, list)
+		with self.assertRaises(frappe.PermissionError):
+			get_service_line()
 
-	def test_get_running_low_allows_cashier_user(self):
+	def test_get_running_low_cashier_needs_branch(self):
 		frappe.set_user(self.cashier_user)
-		result = get_running_low()
-		self.assertIsInstance(result, list)
+		with self.assertRaises(frappe.PermissionError):
+			get_running_low()

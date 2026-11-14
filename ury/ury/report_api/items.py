@@ -5,6 +5,7 @@ from ury.ury.report_api.utils import (
 	get_business_day_condition,
 	report_settings_join,
 	require_manager,
+	user_companies,
 	validate_date_range,
 )
 
@@ -147,13 +148,24 @@ def get_item_wise_purchase_history(start_date, end_date, branch=None, page=1, pa
 	page_size = max(1, min(int(page_size), 200))
 	offset = (page - 1) * page_size
 
-	params = {"start_date": start_date, "end_date": end_date, "limit": page_size, "offset": offset}
+	# VEYQON: Phase 9 RS-3 — Purchase Invoice read, and only the companies of the user's branches
+	if not frappe.has_permission("Purchase Invoice", "read"):
+		frappe.throw("Not permitted to read Purchase Invoices.", frappe.PermissionError)
+	companies = user_companies()
+	# an empty IN () is a SQL error; a never-matching name keeps the zero-company case empty
+	company_pred = "AND a.`company` IN %(companies)s" if companies is not None else ""
 
-	base_sql = """
+	params = {
+		"start_date": start_date, "end_date": end_date, "limit": page_size, "offset": offset,
+		"companies": companies or [""],
+	}
+
+	base_sql = f"""
 		FROM `tabPurchase Invoice` a
 		INNER JOIN `tabPurchase Invoice Item` b ON a.`name` = b.`parent`
 		WHERE a.`docstatus` = 1
 			AND a.`posting_date` BETWEEN %(start_date)s AND %(end_date)s
+			{company_pred}
 		GROUP BY b.`item_code`
 	"""
 

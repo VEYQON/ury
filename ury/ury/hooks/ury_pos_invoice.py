@@ -28,9 +28,7 @@ def guard_ury_item_changes(doc):
     not a REST / desk save. Non-URY POS Invoices (profile without a restaurant) are untouched."""
     if doc.get("is_return") or any(getattr(frappe.flags, f, False) for f in URY_ITEM_WRITE_FLAGS) or is_pos_superuser():
         return
-    if not (doc.get("restaurant") or doc.get("restaurant_table") or (
-        doc.get("pos_profile") and frappe.db.get_value("POS Profile", doc.pos_profile, "restaurant")
-    )):
+    if not _is_ury_invoice(doc):
         return
     before = doc.get_doc_before_save()
     if before is None:
@@ -42,6 +40,39 @@ def guard_ury_item_changes(doc):
         frappe._("Restaurant order items and prices can only be changed from the POS."),
         frappe.PermissionError,
     )
+
+
+def _is_ury_invoice(doc):
+    return bool(doc.get("restaurant") or doc.get("restaurant_table") or (
+        doc.get("pos_profile") and frappe.db.get_value("POS Profile", doc.pos_profile, "restaurant")
+    ))
+
+
+def guard_paid_online(doc):
+    """VEYQON: H1 a URY bill the guest already paid online / by card (a Paid Payment Request) is
+    submitted only with a payment row of that request's mode for at least the paid amount, so a
+    cashier cannot close it as cash too. Locking read: sees a settlement that committed meanwhile."""
+    if not _is_ury_invoice(doc):
+        return
+    paid = frappe.db.get_values(
+        "Payment Request",
+        {"reference_doctype": "POS Invoice", "reference_name": doc.name, "docstatus": 1, "status": "Paid"},
+        ["name", "grand_total", "mode_of_payment"],
+        as_dict=True,
+        for_update=True,
+    )
+    need = {}
+    for pr in paid or []:
+        need[pr.mode_of_payment] = need.get(pr.mode_of_payment, 0) + flt(pr.grand_total)
+    for mode, amount in need.items():
+        got = sum(flt(p.amount) for p in (doc.get("payments") or []) if mode and p.mode_of_payment == mode)
+        if flt(got, 2) < flt(amount, 2):
+            frappe.throw(
+                frappe._("This bill was already paid online: {0} by {1}. Enter at least that amount under {1} before submitting.").format(
+                    flt(amount, 2), mode or frappe._("an unknown mode of payment")
+                ),
+                frappe.ValidationError,
+            )
 
 
 def before_insert(doc, method):
@@ -61,6 +92,7 @@ def validate(doc, method):
 
 
 def before_submit(doc, method):
+    guard_paid_online(doc)  # VEYQON: H1
     calculate_and_set_times(doc, method)
     validate_invoice_print(doc, method)
     ro_reload_submit(doc, method)

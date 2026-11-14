@@ -49,7 +49,23 @@ def _config(**overrides):
     return base
 
 
-class TestGetItemAvailabilityPreProduced(FrappeTestCase):
+class _BranchInCompany(FrappeTestCase):
+    """VEYQON: GF-7 -- _verify_branch_scope checks Branch.company for everyone (Administrator
+    too); these mocked suites use Branch A / Branch B of Company A."""
+
+    def setUp(self):
+        super().setUp()
+        original = frappe.db.get_value
+
+        def get_value(doctype, *args, **kwargs):
+            return "Company A" if doctype == "Branch" else original(doctype, *args, **kwargs)
+
+        p = patch(f"{MODULE}.frappe.db.get_value", side_effect=get_value)
+        p.start()
+        self.addCleanup(p.stop)
+
+
+class TestGetItemAvailabilityPreProduced(_BranchInCompany):
 
     @patch(f"{MODULE}._resolve_plan_remaining")
     @patch(f"{MODULE}.project_fg_allocatable")
@@ -150,7 +166,7 @@ class TestGetItemAvailabilityPreProduced(FrappeTestCase):
         self.assertFalse(result["sellable"])
 
 
-class TestGetItemAvailabilityMadeToOrder(FrappeTestCase):
+class TestGetItemAvailabilityMadeToOrder(_BranchInCompany):
 
     @patch(f"{MODULE}.compile_bom_vector")
     @patch(f"{MODULE}._resolve_production_config")
@@ -224,7 +240,7 @@ class TestGetItemAvailabilityMadeToOrder(FrappeTestCase):
         self.assertEqual(result["blocking_component"], "PATTY")
 
 
-class TestGetItemAvailabilityFailClosed(FrappeTestCase):
+class TestGetItemAvailabilityFailClosed(_BranchInCompany):
 
     @patch(f"{MODULE}._resolve_production_config")
     def test_missing_department(self, mock_config):
@@ -290,7 +306,7 @@ class TestGetItemAvailabilityFailClosed(FrappeTestCase):
             get_item_availability("ITEM-CAKE", "Branch A", "")
 
 
-class TestGetItemAvailabilityBranchIsolation(FrappeTestCase):
+class TestGetItemAvailabilityBranchIsolation(_BranchInCompany):
 
     @patch(f"{MODULE}._resolve_plan_remaining")
     @patch(f"{MODULE}.project_fg_allocatable")
@@ -353,7 +369,7 @@ class TestGetItemAvailabilityBranchIsolation(FrappeTestCase):
         self.assertIn(("ITEM-CAKE", "Kitchen Warehouse B - URY", "Company A"), fg_calls)
 
 
-class TestGetItemAvailabilityDirectRetail(FrappeTestCase):
+class TestGetItemAvailabilityDirectRetail(_BranchInCompany):
 
     @patch(f"{MODULE}.get_allocatable_qty")
     @patch(f"{MODULE}._resolve_production_config")
@@ -371,7 +387,7 @@ class TestGetItemAvailabilityDirectRetail(FrappeTestCase):
         self.assertEqual(result["production_policy"], "DIRECT_RETAIL")
 
 
-class TestGetItemAvailabilityBundle(FrappeTestCase):
+class TestGetItemAvailabilityBundle(_BranchInCompany):
 
     @patch(f"{MODULE}.project_fg_allocatable")
     @patch(f"{MODULE}._fetch_bundle_children")
@@ -440,7 +456,7 @@ class TestGetItemAvailabilityBundle(FrappeTestCase):
         self.assertEqual(result["blocking_component"], "ITEM-CHILD-2")
 
 
-class TestAvailabilityProductionContextIntegration(FrappeTestCase):
+class TestAvailabilityProductionContextIntegration(_BranchInCompany):
     @patch(f"{MODULE}.project_fg_allocatable")
     @patch(f"{MODULE}._resolve_plan_remaining")
     @patch(
@@ -498,7 +514,7 @@ class TestAvailabilityProductionContextIntegration(FrappeTestCase):
         )
 
 
-class TestControlledBySalesPlanPolarity(FrappeTestCase):
+class TestControlledBySalesPlanPolarity(_BranchInCompany):
     """Regression coverage for B-1: `controlled_by_sales_plan` doctype default
     must be 1 (mandatory plan gating), and the code must keep failing closed
     for existing/default rows when no plan is active."""
@@ -623,7 +639,7 @@ class TestControlledBySalesPlanPolarity(FrappeTestCase):
         self.assertEqual(result["available_qty"], 50)
 
 
-class TestAvailabilityModeOverride(FrappeTestCase):
+class TestAvailabilityModeOverride(_BranchInCompany):
     """Regression coverage for B-2: the 'Always Available' override must
     never force sellable over a structural/config error, but must be able to
     override a purely commercial not-sellable reason (e.g. FG_OUT_OF_STOCK)."""
@@ -668,7 +684,7 @@ class TestAvailabilityModeOverride(FrappeTestCase):
         self.assertFalse(result["sellable"])
 
 
-class TestStockAvailableAvailabilityMode(FrappeTestCase):
+class TestStockAvailableAvailabilityMode(_BranchInCompany):
     """Coverage for the "Stock Available" availability_mode: an availability
     override (not a production-policy change) that bypasses every Sales Plan
     gate -- no active plan required, exhausted plans ignored, regardless of
@@ -1063,7 +1079,7 @@ class TestGetItemAvailabilityBranchScopePermissionBoundary(FrappeTestCase):
 
     _verify_branch_scope() (read directly in source before writing this
     test) raises frappe.PermissionError when the calling user is not
-    Administrator/System Manager/URY Admin and has no `URY User` row
+    Administrator/System Manager and has no `URY User` row
     assigning them to the requested branch. That check runs immediately
     after the item_code presence check, before any config/DB lookups
     this suite's other tests mock out -- so a roleless user with no

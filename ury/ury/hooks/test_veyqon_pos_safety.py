@@ -15,8 +15,8 @@ PRINT = "ury.ury.api.ury_print"
 SPC = "ury.ury.doctype.sub_pos_closing.sub_pos_closing"
 
 
-def _as(user, roles=(), branches=()):
-	"""Patch the session user, roles and extra URY User branches seen by ury.ury_pos.api."""
+def _as(user, roles=(), branches=("B1",)):
+	"""Patch the session user, roles and URY User branches seen by ury.ury_pos.api."""
 	session = patch(f"{POS}.frappe.session", frappe._dict(user=user))
 	get_roles = patch(f"{POS}.frappe.get_roles", return_value=list(roles))
 	user_branches = patch(f"{POS}.user_branches", return_value=list(branches))
@@ -49,6 +49,18 @@ class TestBranchAndBillingHelpers(FrappeTestCase):
 		# review fix #4: any of the user's URY User branches
 		with _Ctx(*_as("c@x", branches=["B1", "B2"]), patch(f"{POS}.getBranch", return_value="B1")):
 			pos_api.assert_user_branch("B2")
+
+	def test_no_ury_user_row_is_permission_error(self):
+		# review M3: owners/admins/managers without a URY User row get a 403, not getBranch()'s ValidationError
+		with _Ctx(*_as("o@x", ["URY Owner"], branches=()), patch(f"{POS}.getBranch", side_effect=AssertionError)):
+			with self.assertRaises(frappe.PermissionError) as ctx:
+				pos_api.assert_user_branch("B1", "Not permitted to print a bill of another branch.")
+		self.assertIn("You are not assigned to branch B1", str(ctx.exception))
+
+	def test_other_branch_names_branch(self):
+		with _Ctx(*_as("c@x")), self.assertRaises(frappe.PermissionError) as ctx:
+			pos_api.assert_user_branch("B2")
+		self.assertIn("You are not assigned to branch B2. Ask an administrator", str(ctx.exception))
 
 	def test_user_branches_reads_every_row(self):
 		with patch(f"{POS}.frappe.session", frappe._dict(user="c@x")), 			 patch(f"{POS}.frappe.db.sql", return_value=[("B1",), ("B2",)], create=True) as sql:

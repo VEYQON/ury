@@ -62,11 +62,11 @@ describe('self-order api', () => {
   describe('bootstrap()', () => {
     it('calls get_ordering_context with a token and persists session+context', async () => {
       const context = buildContext()
-      callGetMock.mockResolvedValueOnce({ message: context })
+      callPostMock.mockResolvedValueOnce({ message: context })
 
       const result = await bootstrap('tok-123')
 
-      expect(callGetMock).toHaveBeenCalledWith(`${M}.get_ordering_context`, { token: 'tok-123' })
+      expect(callPostMock).toHaveBeenCalledWith(`${M}.get_ordering_context`, { token: 'tok-123' })
       expect(result).toEqual(context)
       expect(getStoredSession()).toBe('sess-1')
       expect(getStoredContext()).toEqual(context)
@@ -76,11 +76,11 @@ describe('self-order api', () => {
   describe('bootstrapDevice()', () => {
     it('calls get_ordering_context with device credentials and persists the result', async () => {
       const context = buildContext({ session: 'sess-device' })
-      callGetMock.mockResolvedValueOnce({ message: context })
+      callPostMock.mockResolvedValueOnce({ message: context })
 
       const result = await bootstrapDevice('dev-1', 'cred-1')
 
-      expect(callGetMock).toHaveBeenCalledWith(`${M}.get_ordering_context`, {
+      expect(callPostMock).toHaveBeenCalledWith(`${M}.get_ordering_context`, {
         device_id: 'dev-1',
         device_credential: 'cred-1',
       })
@@ -121,11 +121,11 @@ describe('self-order api', () => {
   describe('getMenu()', () => {
     it('unwraps the message envelope for get_customer_menu', async () => {
       const menu = { items: [], modified_time: null, name: null }
-      callGetMock.mockResolvedValueOnce({ message: menu })
+      callPostMock.mockResolvedValueOnce({ message: menu })
 
       const result = await getMenu('sess-1')
 
-      expect(callGetMock).toHaveBeenCalledWith(`${M}.get_customer_menu`, { session: 'sess-1' })
+      expect(callPostMock).toHaveBeenCalledWith(`${M}.get_customer_menu`, { session: 'sess-1' })
       expect(result).toEqual(menu)
     })
   })
@@ -133,11 +133,11 @@ describe('self-order api', () => {
   describe('getCurrentOrder()', () => {
     it('unwraps the message envelope for get_customer_order', async () => {
       const order = { invoice: null, items: [], grand_total: 0, billed: false }
-      callGetMock.mockResolvedValueOnce({ message: order })
+      callPostMock.mockResolvedValueOnce({ message: order })
 
       const result = await getCurrentOrder('sess-1')
 
-      expect(callGetMock).toHaveBeenCalledWith(`${M}.get_customer_order`, { session: 'sess-1' })
+      expect(callPostMock).toHaveBeenCalledWith(`${M}.get_customer_order`, { session: 'sess-1' })
       expect(result).toEqual(order)
     })
   })
@@ -168,11 +168,11 @@ describe('self-order api', () => {
         variants: [],
         addons: [],
       }
-      callGetMock.mockResolvedValueOnce({ message: detail })
+      callPostMock.mockResolvedValueOnce({ message: detail })
 
       const result = await getCustomerProduct('sess-1', 'ITEM-1')
 
-      expect(callGetMock).toHaveBeenCalledWith(`${M}.get_customer_product`, {
+      expect(callPostMock).toHaveBeenCalledWith(`${M}.get_customer_product`, {
         session: 'sess-1',
         item_code: 'ITEM-1',
       })
@@ -195,11 +195,11 @@ describe('self-order api', () => {
   describe('getStatus()', () => {
     it('gets order status and unwraps the response', async () => {
       const status = { session_status: 'ACTIVE', invoice: null }
-      callGetMock.mockResolvedValueOnce({ message: status })
+      callPostMock.mockResolvedValueOnce({ message: status })
 
       const result = await getStatus('sess-1')
 
-      expect(callGetMock).toHaveBeenCalledWith(`${M}.get_order_status`, { session: 'sess-1' })
+      expect(callPostMock).toHaveBeenCalledWith(`${M}.get_order_status`, { session: 'sess-1' })
       expect(result).toEqual(status)
     })
   })
@@ -219,11 +219,11 @@ describe('self-order api', () => {
   describe('getPaymentStatus()', () => {
     it('gets payment status and unwraps the response', async () => {
       const status = { status: 'Paid' }
-      callGetMock.mockResolvedValueOnce({ message: status })
+      callPostMock.mockResolvedValueOnce({ message: status })
 
       const result = await getPaymentStatus('sess-1')
 
-      expect(callGetMock).toHaveBeenCalledWith(`${M}.get_payment_status`, { session: 'sess-1' })
+      expect(callPostMock).toHaveBeenCalledWith(`${M}.get_payment_status`, { session: 'sess-1' })
       expect(result).toEqual(status)
     })
   })

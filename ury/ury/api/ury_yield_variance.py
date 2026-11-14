@@ -20,6 +20,7 @@ from frappe.utils import cint, flt, getdate
 
 from ury.ury.report_api.utils import require_manager, user_has_branch_access
 from ury.ury.services.yield_branch_scope import branch_item_codes
+from ury.ury_pos.api import assert_user_branch, is_pos_superuser  # VEYQON: GF-5
 
 
 YIELD_CHECK_DOCTYPE = "URY Yield Check"
@@ -212,6 +213,7 @@ def get_yield_variance(company, branch=None, item=None):
 	# that accept a caller-supplied branch.
 	require_manager()
 	_require_scope(company)
+	_require_report_scope(company, branch)  # VEYQON: GF-5
 
 	filters = {"company": company}
 	if branch:
@@ -303,6 +305,7 @@ def get_yield_check_compliance(company, branch=None):
 	# configured for production at the given branch.
 	require_manager()
 	_require_scope(company)
+	_require_report_scope(company, branch)  # VEYQON: GF-5
 
 	item_filters = {
 		"custom_yield_tracked": 1,
@@ -372,10 +375,12 @@ def get_yield_check_compliance(company, branch=None):
 			authorized_issues = frappe.get_all(
 				"URY Issue Authorization",
 				filters={
+					"company": company,  # VEYQON: GF-5 -- never other companies' authorizations
 					"component_item": item_code,
 					"status": "Authorized",
 					"creation": ["between", [start_date, today + timedelta(days=1)]],
 				} if branch is None else {
+					"company": company,  # VEYQON: GF-5
 					"component_item": item_code,
 					"branch": branch,
 					"status": "Authorized",
@@ -397,7 +402,7 @@ def get_yield_check_compliance(company, branch=None):
 
 		elif cadence == "Sampled":
 			# Count days in the last 30 where the deterministic hash picked this item.
-			required_count = _count_sampled_days(start_date, today, branch, item_code)
+			required_count = _count_sampled_days(start_date, today, branch, item_code, company)
 
 		# TRACK.md F9 decision: nothing was required, so compliance is NOT
 		# MEASURABLE for this row -- not 100%. Emitting None (JSON null)
@@ -425,7 +430,7 @@ def get_yield_check_compliance(company, branch=None):
 # --- internal helpers -------------------------------------------------------
 
 
-def _count_sampled_days(start_date, end_date, branch, item_code):
+def _count_sampled_days(start_date, end_date, branch, item_code, company=None):
 	"""Count days in [start_date, end_date) where item_code is sampled.
 
 	Uses the same deterministic hash logic as yield_check_reminders.py's
@@ -446,7 +451,8 @@ def _count_sampled_days(start_date, end_date, branch, item_code):
 	# using actual branch names, not a fake "all" placeholder that the cadence engine never uses
 	if branch is None:
 		# Get all branches and sum sampled days for each
-		branches = frappe.get_all("Branch", pluck="name")
+		# VEYQON: GF-5 -- only this company's branches.
+		branches = frappe.get_all("Branch", filters={"company": company} if company else None, pluck="name")
 		total_count = 0
 		for branch_name in branches:
 			total_count += _count_sampled_days(start_date, end_date, branch_name, item_code)
@@ -469,6 +475,18 @@ def _count_sampled_days(start_date, end_date, branch, item_code):
 		current_date += timedelta(days=1)
 
 	return count
+
+
+def _require_report_scope(company, branch):
+	"""VEYQON: GF-5 -- a non-System-Manager reports on one of their URY User branches; a given
+	branch must belong to `company` (fail closed on a branch without one)."""
+	if not branch:
+		if not is_pos_superuser():
+			frappe.throw(_("Branch is required"), frappe.PermissionError)
+		return
+	assert_user_branch(branch)
+	if frappe.db.get_value("Branch", branch, "company") != company:
+		frappe.throw(_("Branch does not belong to the given company"), frappe.PermissionError)
 
 
 def _require_scope(company):

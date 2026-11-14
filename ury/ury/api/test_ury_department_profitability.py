@@ -69,7 +69,10 @@ class _RolesPatch:
         # instead, matching the pattern used elsewhere in this test suite
         # family (e.g. test_ury_reservation_service.py's mock_session).
         p2 = patch(f"{MOD}.frappe.session", MagicMock(user=self.user))
-        self._patches = [p1, p2]
+        # VEYQON: GF-2 -- non-full tiers are scoped by the URY User branch; this user is on URY Branch.
+        p3 = patch("ury.ury_pos.api.getBranch", return_value="URY Branch")
+        p4 = patch("ury.ury_pos.api.user_branches", return_value=["URY Branch"])
+        self._patches = [p1, p2, p3, p4]
         for p in self._patches:
             p.start()
         return self
@@ -385,6 +388,13 @@ class TestBranchAndCompanyScope(unittest.TestCase):
         mock_read.assert_called_once_with("Company A", "Shared Branch Name", "2026-08-28")
 
 
+def _dept_get_all(plans, managed=("Kitchen",)):
+    """VEYQON: GF-3 -- the department tier reads URY Production Department.department_manager."""
+    def get_all(doctype, *args, **kwargs):
+        return list(managed) if doctype == "URY Production Department" else plans
+    return get_all
+
+
 class TestDepartmentManagerScope(unittest.TestCase):
     def setUp(self):
         # get_department_profitability()/get_plan_vs_actual() call
@@ -410,7 +420,7 @@ class TestDepartmentManagerScope(unittest.TestCase):
             return None
 
         plans = [_plan(snapshot=SNAPSHOT_KITCHEN)]
-        with patch(f"{MOD}.frappe.get_all", return_value=plans), \
+        with patch(f"{MOD}.frappe.get_all", side_effect=_dept_get_all(plans)), \
              patch(f"{MOD}.frappe.db.get_value", side_effect=get_value_side_effect), \
              patch(f"{MOD}._read_pos_invoice_lines", return_value=[_invoice_line(item_code="Burger")]), \
              _RolesPatch(["Department Manager"]):
@@ -428,7 +438,7 @@ class TestDepartmentManagerScope(unittest.TestCase):
                 return {"branch": "URY Branch", "department": "Kitchen"}  # assigned branch differs
             return None
 
-        with patch(f"{MOD}.frappe.get_all", return_value=[_plan()]), \
+        with patch(f"{MOD}.frappe.get_all", side_effect=_dept_get_all([_plan()])), \
              patch(f"{MOD}.frappe.db.get_value", side_effect=get_value_side_effect), \
              patch(f"{MOD}._read_pos_invoice_lines", return_value=[]), \
              _RolesPatch(["Department Manager"]):
@@ -444,7 +454,7 @@ class TestDepartmentManagerScope(unittest.TestCase):
                 return {"branch": "URY Branch", "department": "Kitchen"}
             return None
 
-        with patch(f"{MOD}.frappe.get_all", return_value=[_plan()]), \
+        with patch(f"{MOD}.frappe.get_all", side_effect=_dept_get_all([_plan()])), \
              patch(f"{MOD}.frappe.db.get_value", side_effect=get_value_side_effect), \
              patch(f"{MOD}._read_pos_invoice_lines", return_value=[]), \
              _RolesPatch(["Department Manager"]):

@@ -682,6 +682,10 @@ def get_plan_status(branch, plan_date):
     """
     if not frappe.has_permission("URY Sales Plan", "read"):
         frappe.throw(_("Not permitted to read Sales Plans"), frappe.PermissionError)
+    # VEYQON: GF-8 -- the caller's URY User branch only, and read on the plan found.
+    from ury.ury_pos.api import assert_user_branch
+
+    assert_user_branch(branch)
 
     rows = frappe.get_all(
         "URY Sales Plan",
@@ -704,6 +708,8 @@ def get_plan_status(branch, plan_date):
             "enforcement_mode": None,
             "superseded_plan": superseded[0]["name"] if superseded else None,
         }
+    if not frappe.has_permission("URY Sales Plan", "read", doc=rows[0]["name"]):
+        frappe.throw(_("Not permitted to read this Sales Plan"), frappe.PermissionError)
     return {
         "name": rows[0]["name"],
         "status": rows[0]["status"],

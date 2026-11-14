@@ -30,7 +30,7 @@ import re
 
 import frappe
 from frappe import _
-from frappe.utils import add_to_date, now_datetime
+from frappe.utils import add_to_date, flt, now_datetime
 from frappe.utils.password import get_decrypted_password
 
 from ury.ury_pos.api import resolve_restaurant_menu
@@ -364,7 +364,7 @@ def _resolve_session(session_token):
 # Bootstrap
 # ---------------------------------------------------------------------------
 
-def _ordering_context_response(raw_session_token, source, profile, table, layout):
+def _ordering_context_response(raw_session_token, source, profile, table, layout, device=None):
     """Shared response shape for every bootstrap-style entry point
     (get_ordering_context, assign_device_table) — never raw branch/table
     names the client didn't already have a right to see."""
@@ -390,6 +390,9 @@ def _ordering_context_response(raw_session_token, source, profile, table, layout
             "item_notes_enabled": bool(profile.enable_item_notes),
             "request_bill_enabled": bool(profile.enable_request_bill) and bool(table),
             "customer_payment_enabled": bool(profile.enable_customer_payment),
+            # VEYQON: S9-25 / G-13 -- what the guest app may offer; the endpoints re-check.
+            "online_payment_enabled": online_payment_ready(profile),
+            "terminal_payment_enabled": bool(profile.enable_customer_payment) and _terminal_ready(device),
             "payment_link_enabled": bool(profile.enable_payment_link),
             "pay_at_counter_enabled": bool(profile.enable_pay_at_counter),
             "add_to_running_table_enabled": bool(profile.allow_add_to_running_table),
@@ -423,7 +426,7 @@ def get_ordering_context(token=None, device_id=None, device_credential=None):
 
     raw_session_token, session = _open_session(profile, source, table, device_name)
 
-    return _ordering_context_response(raw_session_token, source, profile, table, layout)
+    return _ordering_context_response(raw_session_token, source, profile, table, layout, device_name)
 
 
 @frappe.whitelist(**_GUEST)
@@ -468,7 +471,7 @@ def assign_device_table(device_id, device_credential, staff_pin, table):
 
     raw_session_token, session = _open_session(profile, source, table, device_name)
 
-    return _ordering_context_response(raw_session_token, source, profile, table, layout)
+    return _ordering_context_response(raw_session_token, source, profile, table, layout, device_name)
 
 
 # ---------------------------------------------------------------------------
@@ -940,16 +943,117 @@ def get_order_status(session):
 # they only differ in how the frontend presents payment_url (auto-redirect
 # vs. copyable/QR link) — no need for two backend code paths.
 #
-# Settlement-on-payment (webhook -> Payment Entry -> invoice submit) is
-# ERPNext core's own responsibility once a real Payment Gateway Account is
-# configured (PaymentRequest.set_as_paid() / its gateway callbacks) — this
-# module does not reimplement or verify gateway webhooks itself. Without a
-# configured gateway (true for this track's dev/test bench — no real
-# Razorpay/Stripe credentials available), get_payment_url() has nothing to
-# return; create_payment_request() still creates a real, correctly-priced
-# Payment Request against the invoice, which is what's actually verifiable
-# without live gateway credentials.
+# VEYQON: S9-25 -- settlement is defined below ("Settlement"): a verified
+# provider confirmation marks the Payment Request Paid; staff submit the invoice.
 # ---------------------------------------------------------------------------
+
+def _paid_request(invoice_name):
+    """VEYQON: S9-25 -- the invoice's Paid Payment Request, if any (a second one would charge twice)."""
+    return frappe.db.get_value(
+        "Payment Request",
+        {"reference_doctype": "POS Invoice", "reference_name": invoice_name, "docstatus": 1, "status": "Paid"},
+        "name",
+    )
+
+
+TERMINAL_TXN = "URY Payment Terminal Transaction"
+
+
+def _open_payment_request(invoice_name, channel="online"):
+    """Run elevated. The invoice's open Payment Request, made by ERPNext from the server-side invoice
+    (the client never supplies an amount or currency). Shared by online and terminal payment (G-13).
+    VEYQON: H2 -- `channel` "online" | "terminal": the two never share a request and never run at once."""
+    from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
+
+    frappe.db.get_value("POS Invoice", invoice_name, "name", for_update=True)  # VEYQON: H3 -- invoice, then request
+    invoice = frappe.get_doc("POS Invoice", invoice_name)
+    if invoice.docstatus != 0:
+        frappe.throw(_("This order is already settled"), frappe.ValidationError)
+    # VEYQON: S9-25 -- already paid online / by card: the rest is paid at the counter.
+    if _paid_request(invoice.name):
+        frappe.throw(_("This order is already paid. Please see staff for anything added since."), frappe.ValidationError)
+    open_prs = frappe.get_all(
+        "Payment Request",
+        filters={"reference_doctype": "POS Invoice", "reference_name": invoice.name, "docstatus": 1, "status": ["in", list(_PAYABLE)]},
+        pluck="name",
+    )
+    by_terminal = set(frappe.get_all(TERMINAL_TXN, filters={"invoice": invoice.name}, pluck="payment_request")) if open_prs else set()
+    if channel == "terminal" and any(name not in by_terminal for name in open_prs):
+        frappe.throw(_("An online payment is open for this order. Finish it, or pay at the counter."), frappe.ValidationError)
+    if channel == "online" and frappe.db.exists(TERMINAL_TXN, {"invoice": invoice.name, "status": "Pending"}):
+        frappe.throw(_("A card payment is in progress on the terminal. Finish it first."), frappe.ValidationError)
+    mine = [name for name in open_prs if (name in by_terminal) == (channel == "terminal")]
+
+    # make_payment_request() derives its own amount from the reference
+    # doc server-side (get_amount()) — the client never supplies one.
+    #
+    # ERPNext quirk (found via live testing, not documented anywhere
+    # obvious): for dt="POS Invoice" specifically, get_amount() does
+    # NOT fall back to outstanding_amount the way it does for Sales/
+    # Purchase Invoice — it only sums payments rows with
+    # type="Phone" matching the configured gateway account, and
+    # throws "Payment Entry is already created" if none exist (reads
+    # as if the invoice were already paid, even on a fresh unpaid
+    # draft — a confusing message for what's really "no online
+    # payment method configured"). This requires the branch's POS
+    # Profile to have a Mode of Payment with Payment Type "Phone"
+    # linked to a real Payment Gateway Account. Surface it as a clear,
+    # honest "not configured yet" rather than ERPNext's confusing
+    # raw message.
+    # VEYQON: S9-24 -- reuse an open request made since the order last changed
+    # instead of submitting a new Payment Request on every call.
+    open_pr = frappe.db.get_value(
+        "Payment Request",
+        {
+            "reference_doctype": "POS Invoice",
+            "reference_name": invoice.name,
+            "docstatus": 1,
+            "status": ["in", list(_PAYABLE)],
+            "creation": [">=", invoice.modified],
+            "name": ["in", mine or [""]],
+        },
+        "name",
+        order_by="creation desc",
+    )
+    if open_pr:
+        return frappe.get_doc("Payment Request", open_pr)
+    try:
+        pr = make_payment_request(
+            dt="POS Invoice",
+            dn=invoice.name,
+            submit_doc=1,
+            mute_email=1,
+            order_type="Shopping Cart",
+            return_doc=1,
+        )
+    except Exception as e:
+        frappe.log_error(f"create_payment_request failed: {e}", "Self-Order Payment")
+        # ERPNext queues its own raw msgprint before we catch it; clear it so only
+        # the customer-appropriate message reaches _server_messages.
+        frappe.clear_messages()
+        frappe.throw(
+            _("Online payment isn't set up for this restaurant yet. Please pay at the counter."),
+            frappe.ValidationError,
+        )
+    # VEYQON: H2 -- older unpaid requests (stale amount, or the other channel's) can no longer be paid.
+    for name in open_prs:
+        if name != pr.name:
+            frappe.db.set_value("Payment Request", name, "status", "Cancelled")
+    return pr
+
+
+def _terminal_ready(device):
+    from ury.ury.api.payment_terminal import terminal_payment_available
+
+    return terminal_payment_available(device)
+
+
+def online_payment_ready(profile):
+    """VEYQON: S9-25 -- online payment is offered only where the verified settlement webhook is configured."""
+    return bool(profile.enable_customer_payment or profile.enable_payment_link) and bool(
+        frappe.conf.get(PAYMENT_WEBHOOK_SECRET_KEY)
+    )
+
 
 @frappe.whitelist(**_GUEST)
 def create_payment_request(session):
@@ -957,83 +1061,18 @@ def create_payment_request(session):
     session = _resolve_session(session)
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
 
-    if not (profile.enable_customer_payment or profile.enable_payment_link):
+    if not online_payment_ready(profile):
         frappe.throw(_("Online payment is not enabled"), frappe.ValidationError)
     if not session.invoice:
         frappe.throw(_("No active order for this session"), frappe.ValidationError)
 
     with _elevated():
-        from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
-
-        invoice = frappe.get_doc("POS Invoice", session.invoice)
-        if invoice.docstatus == 1:
-            frappe.throw(_("This order is already settled"), frappe.ValidationError)
-
-        # make_payment_request() derives its own amount from the reference
-        # doc server-side (get_amount()) — the client never supplies one.
-        #
-        # ERPNext quirk (found via live testing, not documented anywhere
-        # obvious): for dt="POS Invoice" specifically, get_amount() does
-        # NOT fall back to outstanding_amount the way it does for Sales/
-        # Purchase Invoice — it only sums payments rows with
-        # type="Phone" matching the configured gateway account, and
-        # throws "Payment Entry is already created" if none exist (reads
-        # as if the invoice were already paid, even on a fresh unpaid
-        # draft — a confusing message for what's really "no online
-        # payment method configured"). This requires the branch's POS
-        # Profile to have a Mode of Payment with Payment Type "Phone"
-        # linked to a real Payment Gateway Account — neither exists on
-        # this dev/test bench, so this is the actual, expected failure
-        # mode here, not a bug in this function. Surface it as a clear,
-        # honest "not configured yet" rather than ERPNext's confusing
-        # raw message.
-        # VEYQON: S9-24 -- reuse an open request made since the order last changed
-        # instead of submitting a new Payment Request on every call.
-        open_pr = frappe.db.get_value(
-            "Payment Request",
-            {
-                "reference_doctype": "POS Invoice",
-                "reference_name": invoice.name,
-                "docstatus": 1,
-                "status": ["in", ["Requested", "Initiated"]],
-                "creation": [">=", invoice.modified],
-            },
-            "name",
-            order_by="creation desc",
-        )
-        try:
-            pr = frappe.get_doc("Payment Request", open_pr) if open_pr else make_payment_request(
-                dt="POS Invoice",
-                dn=invoice.name,
-                submit_doc=1,
-                mute_email=1,
-                order_type="Shopping Cart",
-                return_doc=1,
-            )
-        except Exception as e:
-            frappe.log_error(f"create_payment_request failed: {e}", "Self-Order Payment")
-            # ERPNext's make_payment_request() queues its own raw msgprint
-            # (e.g. "Payment Entry is already created") via frappe.throw
-            # before we ever get a chance to catch it — that message stays
-            # queued in frappe.local.message_log even after we catch the
-            # exception here, so it would still reach the client's
-            # _server_messages alongside our clean one below. Clear it so
-            # only the customer-appropriate message is ever queued.
-            frappe.clear_messages()
-            frappe.throw(
-                _("Online payment isn't set up for this restaurant yet. Please pay at the counter."),
-                frappe.ValidationError,
-            )
-
+        pr = _open_payment_request(session.invoice, "online")
         payment_url = None
         try:
             payment_url = pr.get_payment_url()
         except Exception as e:
-            # A Payment Request was created but the configured gateway
-            # rejected the URL request — the Payment Request itself is
-            # still real and valid; only the redirect/link URL is
-            # unavailable. Surface this plainly instead of fabricating a
-            # fake link.
+            # The Payment Request is real; only the gateway link is unavailable. Never fabricate one.
             frappe.log_error(f"Payment Request created but no payment URL available: {e}", "Self-Order Payment")
 
     return {
@@ -1055,7 +1094,7 @@ def get_payment_status(session):
     with _elevated():
         pr = frappe.db.get_value(
             "Payment Request",
-            {"reference_doctype": "POS Invoice", "reference_name": session.invoice},
+            {"reference_doctype": "POS Invoice", "reference_name": session.invoice, "docstatus": 1},
             ["name", "status", "grand_total"],
             as_dict=True,
             order_by="creation desc",
@@ -1064,6 +1103,176 @@ def get_payment_status(session):
     if not pr:
         return {"status": None}
     return {"payment_request": pr.name, "status": pr.status, "amount": pr.grand_total}
+
+
+MAX_PAID_ONLINE_INVOICES = 50
+
+
+@frappe.whitelist(methods=["POST"])
+def get_paid_online(invoices):
+    """VEYQON: H1 -- staff POS: what guests paid online / by card on these bills, as
+    {invoice: {amount, currency, mode}}. Each invoice is read- and branch-checked, so cashiers need
+    no Payment Request read (that would list every company's requests)."""
+    from ury.ury_pos.api import assert_user_branch
+
+    names = frappe.parse_json(invoices) if isinstance(invoices, str) else invoices
+    if not isinstance(names, list) or len(names) > MAX_PAID_ONLINE_INVOICES or not all(isinstance(n, str) and n for n in names):
+        frappe.throw(_("Send a list of up to {0} invoice names").format(MAX_PAID_ONLINE_INVOICES), frappe.ValidationError)
+    names = list(dict.fromkeys(names))
+    for name in names:
+        if not frappe.db.exists("POS Invoice", name):
+            frappe.throw(_("Not permitted"), frappe.PermissionError)
+        frappe.has_permission("POS Invoice", "read", doc=name, throw=True)
+        assert_user_branch(frappe.db.get_value("POS Invoice", name, "branch"))
+    rows = frappe.get_all(
+        "Payment Request",
+        filters={"reference_doctype": "POS Invoice", "reference_name": ["in", names], "docstatus": 1, "status": "Paid"},
+        fields=["reference_name", "grand_total", "currency", "mode_of_payment"],
+    ) if names else []
+    out = {}
+    for r in rows:
+        paid = out.setdefault(r.reference_name, {"amount": 0, "currency": r.currency, "mode": r.mode_of_payment})
+        paid["amount"] = flt(paid["amount"] + flt(r.grand_total), 2)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Settlement (VEYQON: S9-25)
+#
+# Decided path: a verified provider confirmation marks the submitted Payment Request "Paid"
+# (what ERPNext itself does for a Phone-channel request, the only kind a POS Invoice gets).
+# The POS Invoice stays draft; the cashier submits it in POS with the Phone mode of payment,
+# and ERPNext's POSInvoice.check_phone_payments() refuses a Phone amount that differs from
+# the Paid request. Nothing here submits an invoice or creates a Payment Entry.
+#
+# Confirmations come from payment_webhook() (HMAC-signed, any gateway adapter) or from the
+# terminal status poll (payment_terminal.py, server -> provider). Never from the guest.
+# ---------------------------------------------------------------------------
+
+PAYMENT_WEBHOOK_SECRET_KEY = "ury_payment_webhook_secret"  # site_config; unset = online payment off
+_PAYABLE = ("Requested", "Initiated")
+
+
+_PAID_REF = "ury-paid-ref:"  # VEYQON: H2 -- Comment on the Payment Request holding the provider reference
+
+
+def _locked_request(pr_name):
+    """VEYQON: H3 -- locks the POS Invoice row, then the Payment Request (the order used everywhere).
+    The invoice's docstatus at lock time is returned as `invoice_docstatus`."""
+    ref = frappe.db.get_value(
+        "Payment Request", pr_name, ["reference_doctype", "reference_name"], as_dict=True
+    ) if isinstance(pr_name, str) and pr_name else None
+    if not ref or ref.reference_doctype != "POS Invoice":
+        frappe.throw(_("Unknown payment request"), frappe.ValidationError)
+    invoice_docstatus = frappe.db.get_value("POS Invoice", ref.reference_name, "docstatus", for_update=True)
+    pr = frappe.db.get_value(
+        "Payment Request",
+        pr_name,
+        ["name", "docstatus", "status", "grand_total", "currency", "reference_doctype", "reference_name"],
+        as_dict=True,
+        for_update=True,
+    )
+    if not pr or pr.docstatus != 1 or pr.reference_doctype != "POS Invoice":
+        frappe.throw(_("Unknown payment request"), frappe.ValidationError)
+    pr.invoice_docstatus = invoice_docstatus
+    return pr
+
+
+def _mismatch(message):
+    frappe.log_error(message, "Self-Order Payment Mismatch")
+
+
+def _paid_reference(pr_name):
+    content = frappe.db.get_value(
+        "Comment",
+        {"reference_doctype": "Payment Request", "reference_name": pr_name, "comment_type": "Info", "content": ["like", _PAID_REF + "%"]},
+        "content",
+    )
+    return content[len(_PAID_REF):] if content else None
+
+
+def settle_payment_request(pr_name, amount, currency, reference=None):
+    """Mark a Payment Request Paid. `amount` / `currency` are what the provider says it captured
+    and must equal the request's own (server-made) values. Idempotent: a repeat with the same reference
+    returns "Already Paid". VEYQON: H2 / M1 -- a capture that cannot be accepted is logged as
+    "Self-Order Payment Mismatch" (staff refund): a second capture throws; one for a Cancelled
+    request, or a Failed one with other values, returns "Mismatch" so the gateway stops retrying."""
+    reference = str(reference) if reference else None
+    with _elevated():
+        pr = _locked_request(pr_name)
+        if pr.status == "Paid":
+            paid_ref = _paid_reference(pr.name)
+            if reference and paid_ref and paid_ref != reference:
+                _mismatch(f"Payment {reference} for {pr.name}: already paid with reference {paid_ref}; refund needed")
+                frappe.throw(_("This payment request is already paid"), frappe.ValidationError)
+            return "Already Paid"
+        matches = flt(amount, 2) == flt(pr.grand_total, 2) and str(currency or "").upper() == str(pr.currency or "").upper()
+        if pr.status not in _PAYABLE and not (pr.status == "Failed" and matches):
+            _mismatch(f"Payment {reference} ({amount} {currency}) for {pr.status} request {pr.name}; refund needed")
+            return "Mismatch"
+        other = _paid_request(pr.reference_name)
+        if other:
+            _mismatch(f"Payment {reference} for {pr.name}: {pr.reference_name} is already paid by {other}; refund needed")
+            frappe.throw(_("This order is already paid"), frappe.ValidationError)
+        if not matches:
+            _mismatch(f"Payment {reference} for {pr.name}: provider reported {amount} {currency}, request is {pr.grand_total} {pr.currency}")
+            frappe.throw(_("Payment amount or currency does not match the request"), frappe.ValidationError)
+        if pr.invoice_docstatus != 0:
+            # Money was captured but the bill was closed or cancelled meanwhile: staff must refund.
+            _mismatch(f"Payment {reference} for {pr.name} arrived after {pr.reference_name} was closed")
+            frappe.throw(_("The order is no longer open"), frappe.ValidationError)
+        frappe.db.set_value("Payment Request", pr.name, "status", "Paid")
+        if reference:
+            frappe.get_doc({
+                "doctype": "Comment", "comment_type": "Info", "reference_doctype": "Payment Request",
+                "reference_name": pr.name, "content": _PAID_REF + reference,
+            }).insert(ignore_permissions=True)
+        frappe.get_doc("POS Invoice", pr.reference_name).add_comment(
+            "Info",
+            _("Paid {0} {1} online (Payment Request {2}, reference {3}). Submit the invoice with the online mode of payment.").format(
+                pr.grand_total, pr.currency, pr.name, reference or "-"
+            ),
+        )
+    return "Paid"
+
+
+def fail_payment_request(pr_name):
+    """A provider-reported failure. Never downgrades a Paid request."""
+    with _elevated():
+        pr = _locked_request(pr_name)
+        if pr.status not in _PAYABLE:
+            return pr.status
+        frappe.db.set_value("Payment Request", pr.name, "status", "Failed")
+    return "Failed"
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def payment_webhook():
+    """Gateway confirmation. Body: JSON {"payment_request", "status": "Paid"|"Failed", "amount",
+    "currency", "reference"}; header X-URY-Signature: hex HMAC-SHA256 of the raw body with site_config
+    `ury_payment_webhook_secret`. A gateway with its own scheme needs a small adapter that verifies it
+    and re-signs. Replays are harmless: the request's state is the idempotency key."""
+    secret = frappe.conf.get(PAYMENT_WEBHOOK_SECRET_KEY)
+    raw = frappe.request.get_data() or b""
+    signature = str(frappe.get_request_header("X-URY-Signature") or "").strip().lower()
+    expected = hmac.new(str(secret).encode(), raw, hashlib.sha256).hexdigest() if secret else ""
+    if not secret or not signature or not hmac.compare_digest(expected, signature):
+        frappe.throw(_("Invalid signature"), frappe.PermissionError)
+    try:
+        event = json.loads(raw)
+    except ValueError:
+        event = None
+    if not isinstance(event, dict):
+        frappe.throw(_("Invalid payload"), frappe.ValidationError)
+    status = event.get("status")
+    if status == "Paid":
+        # VEYQON: M1 -- "Mismatch" (logged for a refund) is still a 200: retrying cannot fix it.
+        result = settle_payment_request(event.get("payment_request"), event.get("amount"), event.get("currency"), event.get("reference"))
+    elif status == "Failed":
+        result = fail_payment_request(event.get("payment_request"))
+    else:
+        frappe.throw(_("Unsupported status"), frappe.ValidationError)
+    return {"status": result}
 
 
 # ---------------------------------------------------------------------------

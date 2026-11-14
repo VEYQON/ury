@@ -10,7 +10,9 @@
  "field_order": [
   "terminal",
   "invoice",
+  "payment_request",
   "transaction_id",
+  "attempt",
   "column_break_txn_info",
   "amount",
   "currency",
@@ -35,11 +37,26 @@
    "reqd": 1
   },
   {
+   "fieldname": "payment_request",
+   "fieldtype": "Link",
+   "label": "Payment Request",
+   "options": "Payment Request",
+   "read_only": 1
+  },
+  {
    "fieldname": "transaction_id",
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Transaction ID",
    "unique": 1
+  },
+  {
+   "description": "Kiosk-generated key of the start request; status and cancel name it (VEYQON: L).",
+   "fieldname": "attempt",
+   "fieldtype": "Data",
+   "label": "Attempt",
+   "read_only": 1,
+   "search_index": 1
   },
   {
    "fieldname": "column_break_txn_info",
@@ -61,7 +78,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "Pending\nApproved\nDeclined\nCancelled"
+   "options": "Pending\nApproved\nDeclined\nCancelled\nError"
   },
   {
    "fieldname": "created_at",
@@ -72,7 +89,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-08-19 00:00:00.000000",
+ "modified": "2026-11-14 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "URY",
  "name": "URY Payment Terminal Transaction",
@@ -93,8 +110,6 @@
    "write": 1
   },
   {
-   "create": 1,
-   "delete": 1,
    "email": 1,
    "export": 1,
    "print": 1,
@@ -102,8 +117,7 @@
    "report": 1,
    "role": "URY Manager",
    "select": 1,
-   "share": 1,
-   "write": 1
+   "share": 1
   },
   {
    "email": 1,

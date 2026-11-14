@@ -1,6 +1,7 @@
 import { call } from '@ury/core'
 
 const M = 'ury.ury.api.self_ordering'
+// VEYQON: the fork makes every guest self-ordering method POST-only (tokens stay out of URLs).
 
 export interface OrderingCapabilities {
   product_detail_enabled: boolean
@@ -121,13 +122,13 @@ interface FrappeResponse<T> {
 }
 
 export async function bootstrap(token: string): Promise<OrderingContext> {
-  const response = await call.get<FrappeResponse<OrderingContext>>(`${M}.get_ordering_context`, { token })
+  const response = await call.post<FrappeResponse<OrderingContext>>(`${M}.get_ordering_context`, { token })
   storeContext(response.message)
   return response.message
 }
 
 export async function bootstrapDevice(deviceId: string, deviceCredential: string): Promise<OrderingContext> {
-  const response = await call.get<FrappeResponse<OrderingContext>>(`${M}.get_ordering_context`, {
+  const response = await call.post<FrappeResponse<OrderingContext>>(`${M}.get_ordering_context`, {
     device_id: deviceId,
     device_credential: deviceCredential,
   })
@@ -152,12 +153,12 @@ export async function assignDeviceTable(
 }
 
 export async function getMenu(session: string): Promise<MenuResponse> {
-  const response = await call.get<FrappeResponse<MenuResponse>>(`${M}.get_customer_menu`, { session })
+  const response = await call.post<FrappeResponse<MenuResponse>>(`${M}.get_customer_menu`, { session })
   return response.message
 }
 
 export async function getCurrentOrder(session: string): Promise<CustomerOrder> {
-  const response = await call.get<FrappeResponse<CustomerOrder>>(`${M}.get_customer_order`, { session })
+  const response = await call.post<FrappeResponse<CustomerOrder>>(`${M}.get_customer_order`, { session })
   return response.message
 }
 
@@ -193,7 +194,7 @@ export interface ProductDetail {
 }
 
 export async function getCustomerProduct(session: string, itemCode: string): Promise<ProductDetail> {
-  const response = await call.get<FrappeResponse<ProductDetail>>(`${M}.get_customer_product`, {
+  const response = await call.post<FrappeResponse<ProductDetail>>(`${M}.get_customer_product`, {
     session,
     item_code: itemCode,
   })
@@ -206,7 +207,7 @@ export async function requestBill(session: string): Promise<{ status: string; re
 }
 
 export async function getStatus(session: string): Promise<OrderStatus> {
-  const response = await call.get<FrappeResponse<OrderStatus>>(`${M}.get_order_status`, { session })
+  const response = await call.post<FrappeResponse<OrderStatus>>(`${M}.get_order_status`, { session })
   return response.message
 }
 
@@ -230,7 +231,7 @@ export async function createPaymentRequest(session: string): Promise<PaymentRequ
 }
 
 export async function getPaymentStatus(session: string): Promise<PaymentStatusResult> {
-  const response = await call.get<FrappeResponse<PaymentStatusResult>>(`${M}.get_payment_status`, { session })
+  const response = await call.post<FrappeResponse<PaymentStatusResult>>(`${M}.get_payment_status`, { session })
   return response.message
 }
 

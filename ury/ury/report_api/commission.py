@@ -6,6 +6,7 @@ from frappe.utils import flt, getdate
 
 from ury.ury.doctype.ury_commission_settings.ury_commission_settings import get_rule_tiers
 
+from ury.ury_pos.api import assert_user_branch
 from ury.ury.report_api.utils import (
 	get_business_day_range_condition,
 	report_settings_join,
@@ -233,6 +234,12 @@ def _fetch_invoices(start_date, end_date, branch, settings):
 
 	params = {"start_date": start_date, "end_date": end_date, "branch": branch}
 	branch_pred = "AND b.`branch` = %(branch)s" if branch else ""
+	if branch:
+		# VEYQON: Phase 9 RS-1 — only the branch's own company's invoices; no company fails closed
+		params["company"] = frappe.db.get_value("Branch", branch, "company")
+		if not params["company"]:
+			frappe.throw("Branch has no company.", frappe.ValidationError)
+		branch_pred += " AND b.`company` = %(company)s"
 
 	rows = frappe.db.sql(
 		f"""
@@ -468,6 +475,7 @@ def _score_and_commission_buckets(buckets, settings):
 @frappe.whitelist()
 def get_employee_commission(start_date, end_date, branch=None, employee=None, sort_by="commission_amount"):
 	require_manager()
+	assert_user_branch(branch)  # VEYQON: Phase 9 RS-1 — one of the user's branches (admins may omit)
 	validate_date_range(start_date, end_date)
 	if sort_by not in ("commission_amount", "attributed_base", "attributed_invoices"):
 		sort_by = "commission_amount"
@@ -558,6 +566,7 @@ def get_employee_commission(start_date, end_date, branch=None, employee=None, so
 @frappe.whitelist()
 def get_employee_commission_detail(employee, start_date, end_date, branch=None):
 	require_manager()
+	assert_user_branch(branch)  # VEYQON: Phase 9 RS-1 — one of the user's branches (admins may omit)
 	validate_date_range(start_date, end_date)
 
 	if not employee:

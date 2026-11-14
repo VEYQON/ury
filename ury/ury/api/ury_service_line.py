@@ -4,11 +4,13 @@ import frappe
 
 from frappe.utils import get_datetime, add_to_date, today
 from ury.ury.report_api.utils import require_dashboard_user
+from ury.ury_pos.api import assert_user_branch
 
 
 @frappe.whitelist(methods=["GET"])
 def get_service_line(branch=None):
 	require_dashboard_user()
+	assert_user_branch(branch)  # VEYQON: Phase 9 RS-4
 	cache_key = f"ury_dashboard_service_line:{branch}"
 	cached = frappe.cache().get_value(cache_key)
 	if cached:
@@ -109,6 +111,7 @@ def _bin_actual_qty(item_code, warehouse=None):
 @frappe.whitelist(methods=["GET"])
 def get_running_low(branch=None):
 	require_dashboard_user()
+	assert_user_branch(branch)  # VEYQON: Phase 9 RS-4
 	cache_key = f"ury_dashboard_running_low:{branch}"
 	cached = frappe.cache().get_value(cache_key)
 	if cached:
@@ -116,8 +119,11 @@ def get_running_low(branch=None):
 
 	warehouse = None
 	if branch:
-		pos_profile = frappe.db.get_value("POS Profile", {"branch": branch}, "warehouse")
-		warehouse = pos_profile
+		# VEYQON: Phase 9 RS-4 — the branch's own enabled POS Profile, first by name (was arbitrary)
+		profiles = frappe.get_all(
+			"POS Profile", filters={"branch": branch, "disabled": 0}, fields=["warehouse"], order_by="name asc", limit=1
+		)
+		warehouse = profiles[0].warehouse if profiles else None
 
 	shift_start = get_datetime(f"{today()} 00:00:00")
 	hours_elapsed = max((get_datetime() - shift_start).total_seconds() / 3600, 0.5)
