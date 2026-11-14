@@ -931,6 +931,8 @@ class TestRequestBill(unittest.TestCase):
         self.assertEqual(result["request"], "SR-EXISTING")
 
 
+# VEYQON: S9-24 -- no open Payment Request to reuse in these cases.
+@patch(f"{MOD}.frappe.db.get_value", new=lambda *a, **k: None)
 class TestCreatePaymentRequest(unittest.TestCase):
     @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")
     @patch(f"{MOD}.frappe.get_doc")
@@ -1195,6 +1197,8 @@ class TestSharePaymentLink(unittest.TestCase):
             share_payment_link("session-token", "")
 
 
+# VEYQON: S9-17 -- the PIN is a Password field now.
+@patch(f"{MOD}.get_decrypted_password", new=lambda *a, **k: "1234")
 class TestAssignDeviceTable(unittest.TestCase):
     """assign_device_table(): staff-PIN-authorized table binding for a
     shared/portable tablet (table_mode="Selectable"). Reuses _resolve_device

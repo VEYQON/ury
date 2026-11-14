@@ -23,6 +23,7 @@ this module is required.
 import json
 
 import frappe
+from ury.ury.api.veyqon_actor import session_actor  # VEYQON: S10-16
 from frappe import _
 
 from ury.ury.report_api.utils import user_has_branch_access
@@ -51,7 +52,7 @@ def create_issue_authorization(
     request that would push authorized+returned-wasted above the component's
     frozen required_qty (exact-demand enforcement).
     """
-    actor = actor or frappe.session.user
+    actor = session_actor(actor)  # VEYQON: S10-16 client actor never trusted
     if not frappe.has_permission(ISSUE_AUTH_DOCTYPE, "create"):
         frappe.throw(_("Not permitted to create Issue Authorization"), frappe.PermissionError)
 
@@ -196,7 +197,9 @@ def prior_quantities(plan, department, branch, company, component_item):
     # live if present so this module needs no change once they land; treat
     # their absence today as zero, never as a cached/stale value.
     returned_qty = _sum_live_if_exists("URY Issue Return", dict(filters), "returned_qty")
-    wasted_qty = _sum_live_if_exists("URY Wastage", dict(filters), "wasted_qty")
+    # VEYQON: S10-17 wastage qty/item live in the child table; use the wastage module's join.
+    from ury.ury.api.ury_wastage import _sum_live_if_exists as _sum_wastage
+    wasted_qty = _sum_wastage("URY Wastage", dict(filters), "wasted_qty")
     return {"authorized_qty": authorized_qty, "returned_qty": returned_qty, "wasted_qty": wasted_qty}
 
 

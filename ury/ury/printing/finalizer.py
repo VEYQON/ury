@@ -147,6 +147,7 @@ def _finalize_bill(print_job_id, final_state, metadata, failure_reason):
                 "invoice": invoice,
                 "print_job_id": print_job_id,
             },
+            room="doctype:POS Invoice",  # VEYQON: K-1/C-13 not the site room
         )
 
         frappe.logger("printing").info(
@@ -265,6 +266,7 @@ def _finalize_kot(print_job_id, final_state, metadata, failure_reason):
                 "invoice": invoice,
                 "print_job_id": print_job_id,
             },
+            room="doctype:URY KOT",  # VEYQON: K-1/C-13 not the site room
         )
         frappe.logger("printing").info(
             {

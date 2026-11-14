@@ -32,6 +32,22 @@ class PrintResult(dict):
         return self.get("status") or super().__str__()
 
 
+def _assert_can_mark_bill_printed(invoice_doc):
+	# VEYQON: P-5 — "printed" unlocks payment, frees tables and starts made-to-order
+	# manufacture, so only a billing user of the invoice's branch may set it.
+	from ury.ury_pos.api import assert_billing_user, assert_user_branch
+
+	if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
+		frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
+	assert_billing_user(invoice_doc.pos_profile, _("Only billing users can print the bill."))
+	assert_user_branch(invoice_doc.branch, _("Not permitted to print a bill of another branch."))
+
+
+def _record_bill_printed(invoice_doc, via):
+	# VEYQON: P-5 — who marked it printed (the comment owner is the session user).
+	invoice_doc.add_comment("Info", _("Bill marked printed ({0})").format(via))
+
+
 def _mark_invoice_printed(invoice_name, was_printed=None, update_modified=True):
 	"""Mark a POS Invoice as printed.
 
@@ -58,10 +74,12 @@ def network_printing(
     doc=None,
     no_letterhead=0,
 ):
-    validate_print_permission(frappe.get_doc(doctype, name))
+    print_doc = frappe.get_doc(doctype, name)
+    validate_print_permission(print_doc)
 
     restaurant_table = None
     if doctype == "POS Invoice":
+        _assert_can_mark_bill_printed(print_doc)  # VEYQON: P-5 (a BILL job marks it printed on completion)
         restaurant_table = frappe.db.get_value("POS Invoice", name, "restaurant_table")
 
     if not print_format and doctype == "POS Invoice":
@@ -99,8 +117,8 @@ def network_printing(
 @frappe.whitelist()
 def select_network_printer(pos_profile, invoice_id, print_format=None):
     invoice_doc = frappe.get_doc("POS Invoice", invoice_id)
-    if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
-        frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
+    _assert_can_mark_bill_printed(invoice_doc)  # VEYQON: P-5
+    pos_profile = invoice_doc.pos_profile or pos_profile  # VEYQON: P-5 — printers come from the invoice's own profile
 
     table = frappe.db.get_value("POS Invoice", invoice_id, "restaurant_table")
     if not print_format and pos_profile:
@@ -160,10 +178,11 @@ def select_network_printer(pos_profile, invoice_id, print_format=None):
 
 @frappe.whitelist()
 def qz_print_update(invoice):
+    # VEYQON: P-5 — gate outside the try so a refusal stays a PermissionError, not "Error while printing".
+    invoice_doc = frappe.get_doc("POS Invoice", invoice)
+    _assert_can_mark_bill_printed(invoice_doc)
     try:
-        invoice_doc = frappe.get_doc("POS Invoice", invoice)
-        if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
-            frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
+        _record_bill_printed(invoice_doc, "qz_print_update")
 
         table = frappe.db.get_value("POS Invoice", invoice, "restaurant_table")
         
@@ -203,9 +222,11 @@ def qz_print_update(invoice):
 
 @frappe.whitelist()
 def print_pos_page(doctype, name, print_format):
-    doc_to_check = frappe.get_doc(doctype, name)
-    if not frappe.has_permission(doctype, "write", doc=doc_to_check):
-        frappe.throw(_("Not permitted to print this document"), frappe.PermissionError)
+    # VEYQON: P-5 — this always marks the POS Invoice `name` printed, so gate that invoice
+    # whatever `doctype` the caller passes.
+    invoice_doc = frappe.get_doc("POS Invoice", name)
+    _assert_can_mark_bill_printed(invoice_doc)
+    _record_bill_printed(invoice_doc, "print_pos_page")
 
     data = {"name": name, "doctype": doctype, "print_format": print_format}
 
@@ -213,7 +234,9 @@ def print_pos_page(doctype, name, print_format):
         "POS Invoice", name, ["restaurant_table", "branch", "name"]
     )
     print_channel = "{}_{}".format("print", branch)
-    frappe.publish_realtime(print_channel, {"data": data})
+    # VEYQON: P-15 — send to the branch's URY users only, not every desk session on the site.
+    for user in frappe.get_all("URY User", filters={"parenttype": "Branch", "parent": branch}, pluck="user"):
+        frappe.publish_realtime(print_channel, {"data": data}, user=user)
 
     invoice_printed = frappe.db.get_value("POS Invoice", name, "invoice_printed")
 

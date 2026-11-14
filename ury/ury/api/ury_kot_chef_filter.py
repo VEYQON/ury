@@ -45,6 +45,7 @@
 import json
 
 import frappe
+from ury.ury.api.veyqon_actor import session_actor  # VEYQON: S10-16
 
 PRODUCTION_UNIT_DOCTYPE = "URY Production Unit"
 KOT_DOCTYPE = "URY KOT"
@@ -90,7 +91,7 @@ def get_filtered_kot_list(user=None, branch=None, company=None, production_unit=
     user's permitted units, never trusted directly. A `production_unit`
     outside the user's permitted branch/company yields an empty KOT list.
     """
-    user = user or frappe.session.user
+    user = session_actor(user)  # VEYQON: S10-16 client user never trusted
     if not user:
         raise ChefFilterError(NOT_PERMITTED, "user is required")
 

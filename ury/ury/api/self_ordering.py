@@ -26,10 +26,12 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 
 import frappe
 from frappe import _
 from frappe.utils import add_to_date, now_datetime
+from frappe.utils.password import get_decrypted_password
 
 from ury.ury_pos.api import resolve_restaurant_menu
 from ury.ury.doctype.ury_order.ury_order import (
@@ -44,6 +46,31 @@ from ury.ury.api.ury_stock_policy import get_branch_stock_policy
 SESSION_TOKEN_BYTES_HASH_LEN = 64  # frappe.generate_hash(length=..)
 MAX_ITEMS_PER_REQUEST = 50
 MAX_COMMENT_LEN = 200
+# VEYQON: G-3 -- whole-number qty per line and a per-session line budget.
+# shortcut: constants, not profile settings; move to URY Self Ordering Profile if a restaurant needs other values.
+MAX_QTY_PER_LINE = 20
+MAX_LINES_PER_SESSION_HOUR = 40
+_GUEST = dict(allow_guest=True, methods=["POST"])  # VEYQON: S9-23 / G-1 -- tokens only in the POST body
+
+
+def _throttle(action, identity, limit, seconds, amount=1):
+    """VEYQON: S9-24 -- fixed-window guest rate limit in Redis. The identity
+    (session token, device id, IP) is hashed so no bearer token sits in a key.
+    Only HTTP calls count, like frappe.rate_limiter (server-side callers are trusted)."""
+    if not getattr(frappe.local, "request", None):
+        return
+    key = frappe.cache.make_key(
+        f"ury_self_order:{action}:{hashlib.sha256(str(identity).encode()).hexdigest()}"
+    )
+    count = frappe.cache.incrby(key, amount)
+    if count == amount:
+        frappe.cache.expire(key, seconds)
+    if count > limit:
+        frappe.throw(_("Too many requests. Please wait a moment and try again."), frappe.TooManyRequestsError)
+
+
+def _throttle_session(action, session_token, limit, seconds):
+    _throttle(action, session_token or getattr(frappe.local, "request_ip", None), limit, seconds)
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +124,10 @@ def _ensure_admin_branch_mapping(branch):
 # ---------------------------------------------------------------------------
 
 def _get_profile_secret(profile_name):
-    secret = frappe.db.get_value("URY Self Ordering Profile", profile_name, "qr_signing_secret")
+    # VEYQON: S9-16 -- Password field; the column holds only asterisks.
+    secret = get_decrypted_password(
+        "URY Self Ordering Profile", profile_name, "qr_signing_secret", raise_exception=False
+    )
     if not secret:
         frappe.throw(_("Self ordering is not configured for this restaurant"), frappe.ValidationError)
     return secret
@@ -129,6 +159,17 @@ def generate_qr_token(profile, table=None):
     signature = _sign(payload, secret)
     raw = f"{payload}|{signature}"
     return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+@frappe.whitelist(methods=["POST"])
+def rotate_qr_signing_secret(profile):
+    """VEYQON: S9-16 / S9-22 -- issue a new signing secret. Every QR code
+    printed for this profile stops working; reprint them afterwards."""
+    doc = frappe.get_doc("URY Self Ordering Profile", profile)
+    doc.check_permission("write")
+    doc.qr_signing_secret = frappe.generate_hash(length=48)
+    doc.save()
+    return {"rotated": True}
 
 
 def _verify_qr_token(token):
@@ -174,7 +215,7 @@ def _hash_credential(raw_credential):
     return hashlib.sha256(raw_credential.encode()).hexdigest()
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])  # VEYQON: S9-23 -- rotates a credential, so no CSRF-free GET
 def enroll_device(device):
     """Staff-only: (re)issue a device credential for a provisioned
     URY Ordering Device. The raw credential is shown once and must be
@@ -205,7 +246,14 @@ def _resolve_device(device_id, credential):
     if not profile.enabled or not profile.enable_kiosk_ordering:
         frappe.throw(_("Kiosk ordering is currently unavailable"), frappe.ValidationError)
 
+    # VEYQON: S9-20 -- the device, its fixed table and its profile must share one branch.
+    if device.branch and device.branch != profile.branch:
+        frappe.throw(_("Device not recognized"), frappe.PermissionError)
     table = device.fixed_table if device.table_mode == "Fixed" else None
+    if device.table_mode == "Fixed" and (
+        not table or frappe.db.get_value("URY Table", table, "branch") != profile.branch
+    ):
+        frappe.throw(_("This device's table is not set up correctly. Please ask staff."), frappe.ValidationError)
     source = "Table Tablet" if device.device_type == "Table Tablet" else "Kiosk"
 
     with _elevated():
@@ -329,12 +377,15 @@ def _ordering_context_response(raw_session_token, source, profile, table, layout
     }
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(**_GUEST)
 def get_ordering_context(token=None, device_id=None, device_credential=None):
     """Entry point for every customer-facing surface. Resolves a QR token
     or a device credential into a fresh ordering session and returns only
     customer-safe channel configuration — never raw branch/table names the
     client didn't already have a right to see."""
+    _throttle("context_ip", getattr(frappe.local, "request_ip", None), 30, 600)
+    if device_id:
+        _throttle("context_device", device_id, 60, 3600)
 
     layout = "Mobile"
     if token:
@@ -350,7 +401,7 @@ def get_ordering_context(token=None, device_id=None, device_credential=None):
     return _ordering_context_response(raw_session_token, source, profile, table, layout)
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(**_GUEST)
 def assign_device_table(device_id, device_credential, staff_pin, table):
     """Bind a shared/portable tablet (`table_mode = "Selectable"`) to a
     table for the duration of a session. Used by `PortableTabletAssignment`
@@ -363,13 +414,17 @@ def assign_device_table(device_id, device_credential, staff_pin, table):
     next iteration would link PINs to individual `Employee` records for
     per-staff attribution/audit — out of scope for this pass.
     """
+    _throttle("assign_table", device_id, 5, 900)  # VEYQON: S9-17 -- PIN guessing limit
     profile, existing_table, source, device_name, layout = _resolve_device(device_id, device_credential)
 
     table_mode = frappe.db.get_value("URY Ordering Device", device_name, "table_mode")
     if table_mode != "Selectable":
         frappe.throw(_("This device is not configured for table selection"), frappe.ValidationError)
 
-    configured_pin = frappe.db.get_value("URY Self Ordering Profile", profile.name, "staff_pin")
+    # VEYQON: S9-17 -- Password field; never readable over REST.
+    configured_pin = get_decrypted_password(
+        "URY Self Ordering Profile", profile.name, "staff_pin", raise_exception=False
+    )
     # Shared-secret equality check, not a password hash — acceptable for
     # this MVP (see class/module docstring conventions elsewhere in this
     # file for the same "don't over-engineer" bar). hmac.compare_digest
@@ -392,8 +447,9 @@ def assign_device_table(device_id, device_credential, staff_pin, table):
 # Menu / product (customer-safe DTOs)
 # ---------------------------------------------------------------------------
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(**_GUEST)
 def get_customer_menu(session):
+    _throttle_session("read", session, 60, 60)
     session = _resolve_session(session)
     order_type = "Dine In" if session.table else "Take Away"
 
@@ -410,8 +466,9 @@ def get_customer_menu(session):
     return menu
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(**_GUEST)
 def get_customer_product(session, item_code):
+    _throttle_session("read", session, 60, 60)
     session = _resolve_session(session)
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
 
@@ -523,8 +580,9 @@ def _sanitize_invoice_for_customer(invoice):
     }
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(**_GUEST)
 def get_customer_order(session):
+    _throttle_session("read", session, 60, 60)
     session = _resolve_session(session)
     if not session.invoice:
         return {"invoice": None, "pickup_code": None, "items": [], "grand_total": 0, "billed": False}
@@ -535,7 +593,7 @@ def get_customer_order(session):
     return _sanitize_invoice_for_customer(invoice)
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(**_GUEST)
 def add_customer_items(session, items):
     """Append-only customer order mutation. `items` is a list of
     {"item": <item_code>, "qty": <number>, "comment": <optional str>} —
@@ -545,6 +603,8 @@ def add_customer_items(session, items):
     price_items_for_invoice() re-derives price server-side from Item Price,
     exactly as it does for staff orders.
     """
+    _throttle_session("add_items", session, 10, 600)
+    session_token = session
     session = _resolve_session(session)
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
 
@@ -602,14 +662,19 @@ def add_customer_items(session, items):
 
         if not item_code or item_code not in menu_names:
             frappe.throw(_("Item {0} is not available on this menu").format(item_code), frappe.ValidationError)
+        # VEYQON: G-3 -- whole numbers 1..MAX_QTY_PER_LINE only (was: any float > 0).
         try:
             qty = float(qty)
         except (TypeError, ValueError):
             qty = 0
-        if qty <= 0:
+        if not qty.is_integer() or not 1 <= qty <= MAX_QTY_PER_LINE:
             frappe.throw(_("Invalid quantity for item {0}").format(item_code), frappe.ValidationError)
+        qty = int(qty)
 
         clean_items.append({"item": item_code, "item_name": item_code, "qty": qty, "comment": comment})
+
+    # VEYQON: G-3 -- cap lines per session per hour, not just per request.
+    _throttle("lines", session_token, MAX_LINES_PER_SESSION_HOUR, 3600, amount=len(clean_items))
 
     order_type = "Dine In" if session.table else "Take Away"
 
@@ -775,8 +840,9 @@ def add_customer_items(session, items):
 # Request bill
 # ---------------------------------------------------------------------------
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(**_GUEST)
 def request_bill(session):
+    _throttle_session("request_bill", session, 5, 600)
     session = _resolve_session(session)
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
 
@@ -811,8 +877,9 @@ def request_bill(session):
 # Status
 # ---------------------------------------------------------------------------
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(**_GUEST)
 def get_order_status(session):
+    _throttle_session("read", session, 60, 60)
     session = _resolve_session(session)
     result = {"session_status": session.status, "invoice": session.invoice}
 
@@ -854,8 +921,9 @@ def get_order_status(session):
 # without live gateway credentials.
 # ---------------------------------------------------------------------------
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(**_GUEST)
 def create_payment_request(session):
+    _throttle_session("payment_request", session, 3, 3600)
     session = _resolve_session(session)
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
 
@@ -889,8 +957,22 @@ def create_payment_request(session):
         # mode here, not a bug in this function. Surface it as a clear,
         # honest "not configured yet" rather than ERPNext's confusing
         # raw message.
+        # VEYQON: S9-24 -- reuse an open request made since the order last changed
+        # instead of submitting a new Payment Request on every call.
+        open_pr = frappe.db.get_value(
+            "Payment Request",
+            {
+                "reference_doctype": "POS Invoice",
+                "reference_name": invoice.name,
+                "docstatus": 1,
+                "status": ["in", ["Requested", "Initiated"]],
+                "creation": [">=", invoice.modified],
+            },
+            "name",
+            order_by="creation desc",
+        )
         try:
-            pr = make_payment_request(
+            pr = frappe.get_doc("Payment Request", open_pr) if open_pr else make_payment_request(
                 dt="POS Invoice",
                 dn=invoice.name,
                 submit_doc=1,
@@ -933,8 +1015,9 @@ def create_payment_request(session):
     }
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(**_GUEST)
 def get_payment_status(session):
+    _throttle_session("payment_status", session, 30, 60)
     session = _resolve_session(session)
     if not session.invoice:
         return {"status": None}
@@ -975,7 +1058,7 @@ def register_communication_provider(fn):
     _communication_provider = fn
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(**_GUEST)
 def share_payment_link(session, recipient):
     """Send the current Payment Request's link to `recipient` (whatever
     format the active communication provider expects — a phone number for
@@ -986,11 +1069,15 @@ def share_payment_link(session, recipient):
     `recipient` is customer-supplied input, not derived from the session,
     so validate it's at least non-empty before handing it to the provider.
     """
+    _throttle_session("share_link", session, 3, 3600)
     session = _resolve_session(session)
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
     if not profile.enable_payment_link:
         frappe.throw(_("Payment links are not enabled"), frappe.ValidationError)
-    if not recipient or not isinstance(recipient, str):
+    # VEYQON: S9-24 -- a phone number or an e-mail address, nothing else.
+    if not isinstance(recipient, str) or not re.fullmatch(
+        r"\+?[0-9][0-9 -]{6,19}|[^@\s]{1,64}@[^@\s]{1,185}\.[^@\s]{2,}", recipient.strip()
+    ):
         frappe.throw(_("A valid recipient is required"), frappe.ValidationError)
 
     with _elevated():

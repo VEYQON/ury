@@ -28,6 +28,7 @@ def _make_pos_profile():
     doc.branch = "Test Branch"
     doc.restaurant = "Test Restaurant"
     doc.company = "Test Company"
+    doc.get.return_value = []  # VEYQON: P-9 reads applicable_for_users
     return doc
 
 
@@ -86,7 +87,8 @@ class TestCreatePosOpeningEntryPermissions(FrappeTestCase):
             patch(f"{MODULE}.frappe.get_doc", side_effect=get_doc_side_effect), \
             patch(f"{MODULE}.frappe.session") as mock_session, \
             patch(f"{MODULE}.frappe.utils.get_datetime", return_value="2026-01-01 00:00:00"), \
-            patch(f"{MODULE}.frappe.utils.getdate", return_value="2026-01-01"):
+            patch(f"{MODULE}.frappe.utils.getdate", return_value="2026-01-01"), \
+            patch(f"{MODULE}.getBranch", return_value="Test Branch"):
             mock_session.user = "manager@ury.test"
             result = pos_api.create_pos_opening_entry("Test Profile")
 

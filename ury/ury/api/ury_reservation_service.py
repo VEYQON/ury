@@ -159,6 +159,7 @@ touch POS Invoice / invoice settlement code anywhere.
 from contextlib import contextmanager
 
 import frappe
+from ury.ury.api.veyqon_actor import session_actor  # VEYQON: S10-16
 from frappe import _
 from frappe.utils import cint, flt
 
@@ -875,7 +876,7 @@ def create_reservation(
 
 	Returns a dict: {"reservation_group": ..., "reservations": [docname, ...]}.
 	"""
-	actor = actor or frappe.session.user
+	actor = session_actor(actor)  # VEYQON: S10-16 client actor never trusted
 	_require_create_permission()
 	_require_positive_qty(qty)
 	_require_scope(branch, company, warehouse, item_code, order_ref)

@@ -74,6 +74,7 @@ Fail-closed order of operations (read before changing this module):
 import json
 
 import frappe
+from ury.ury.api.veyqon_actor import session_actor  # VEYQON: S10-16
 from frappe import _
 
 from ury.ury.api.ury_kot_execution_service import READY, SERVED
@@ -282,7 +283,7 @@ def fulfil_preproduced_order(kot, item_code, qty, reservation_ref, actor=None):
 	`URY Fulfilment Record` row (existing, on an idempotent replay; newly
 	inserted otherwise).
 	"""
-	actor = actor or frappe.session.user
+	actor = session_actor(actor)  # VEYQON: S10-16 client actor never trusted
 
 	_require_fulfilment_doctype()
 	_require_kot(kot)

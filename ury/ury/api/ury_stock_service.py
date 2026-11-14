@@ -42,6 +42,7 @@ frees up remaining entitlement to re-authorize.
 import json
 
 import frappe
+from ury.ury.api.veyqon_actor import session_actor  # VEYQON: S10-16
 from frappe import _
 
 
@@ -63,7 +64,7 @@ def transfer_to_department(issue_authorization, qty, branch=None, company=None, 
     branch/company do not match the authorization's scope, or if `qty` would
     push cumulative transfers (net of returns) beyond `authorized_qty`.
     """
-    actor = actor or frappe.session.user
+    actor = session_actor(actor)  # VEYQON: S10-16 client actor never trusted
     _require_create_permission()
     _require_positive_qty(qty)
 
@@ -102,7 +103,7 @@ def receive_at_department(transfer_movement, qty, branch=None, company=None, act
     record, if branch/company do not match, or if `qty` would push cumulative
     receipts against that transfer beyond the transfer's own `qty`.
     """
-    actor = actor or frappe.session.user
+    actor = session_actor(actor)  # VEYQON: S10-16 client actor never trusted
     _require_create_permission()
     _require_positive_qty(qty)
 
@@ -155,7 +156,7 @@ def return_to_central_store(issue_authorization, qty, branch=None, company=None,
     Fails closed if `qty` would push cumulative returns beyond the
     department's effective holding: `received_qty - returned_qty`.
     """
-    actor = actor or frappe.session.user
+    actor = session_actor(actor)  # VEYQON: S10-16 client actor never trusted
     _require_create_permission()
     _require_positive_qty(qty)
 

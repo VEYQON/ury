@@ -251,13 +251,13 @@ class TestApproveWastage(FrappeTestCase):
         # row (status != Authorized) must not appear in what get_all returns
         # for that filter, so it never reduces held qty / entitlement.
         auth_doc = _auth_doc()
-        with patch(f"{MODULE}.frappe.get_all", return_value=[]) as mocked_get_all, patch(
-            f"{MODULE}.frappe.db.exists", return_value=False
-        ):
+        # VEYQON: S10-17 wastage qty is summed from the items child table via SQL.
+        with patch(f"{MODULE}.frappe.get_all", return_value=[]), patch(
+            f"{MODULE}.frappe.db.exists", return_value=True
+        ), patch(f"{MODULE}.frappe.db.sql", return_value=[[None]]) as mocked_sql:
             result = held_quantity(auth_doc)
         self.assertEqual(result, 10)
-        called_filters = mocked_get_all.call_args.kwargs.get("filters") or mocked_get_all.call_args[0][1]
-        self.assertEqual(called_filters.get("status"), "Authorized")
+        self.assertEqual(mocked_sql.call_args[0][1].get("status"), "Authorized")
 
     def test_approval_requires_correct_permission(self):
         draft = self._draft_doc()

@@ -330,6 +330,7 @@ doc_events = {
         ],
         },
     "Quality Review": {
+        "validate": "ury.ury.hooks.checklist.validate_checklist_review",  # VEYQON: W-9
         "on_update": "ury.ury.hooks.update_accounts.checklist",
     },
     "URY Menu Course": {

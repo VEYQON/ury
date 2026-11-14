@@ -48,7 +48,7 @@ class _PermErr(Exception):
 	pass
 
 
-def _fake_frappe(path, method, body, header, secret):
+def _fake_frappe(path, method, body, header, secret, chairman_account=None):
 	f = types.ModuleType("frappe")
 	f.PermissionError = _PermErr
 	def throw(msg, exc=Exception):
@@ -59,6 +59,8 @@ def _fake_frappe(path, method, body, header, secret):
 	req.headers = {"X-Hub-Signature-256": header} if header is not None else {}
 	f.local = types.SimpleNamespace(request=req)
 	f.conf = {w.SECRET_CONFIG_KEY: secret} if secret is not None else {}
+	if chairman_account:
+		f.conf[w.CHAIRMAN_ACCOUNT_KEY] = chairman_account
 	return f
 
 
@@ -81,9 +83,13 @@ class TestGuard(unittest.TestCase):
 		with self.assertRaises(_PermErr):
 			self.run_guard(self.P, "POST", b"{}", None, SECRET)
 
-	def test_no_secret_configured_403(self):
+	def test_no_secret_but_chairman_channel_on_403(self):
 		with self.assertRaises(_PermErr):
-			self.run_guard(self.P, "POST", b"{}", sign(b"{}"), None)
+			self.run_guard(self.P, "POST", b"{}", sign(b"{}"), None, "Owner WA")
+
+	def test_no_secret_and_no_chairman_channel_passes(self):
+		# VEYQON: W-6 -- URY does not use WhatsApp here; other apps' webhooks are untouched.
+		self.assertIsNone(self.run_guard(self.P, "POST", b"{}", None, None))
 
 	def test_get_untouched(self):
 		self.assertIsNone(self.run_guard(self.P, "GET", b"", None, None))

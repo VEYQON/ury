@@ -185,6 +185,19 @@ def _kot_scope(kot):
 	return row["branch"], company, row.get("production")
 
 
+def _require_kot_open(kot):
+	"""VEYQON: K-14 no execution transition on a cancelled or unsubmitted KOT.
+
+	A whole-order cancel sets the original KOT to docstatus 2, a cancel
+	execution sets a CANCELLED_* state; a stale screen must not mark that food
+	READY (posting intent) or overwrite the cancelled state.
+	"""
+	row = frappe.db.get_value(KOT_DOCTYPE, kot, ["docstatus", "type"], as_dict=True) or {}
+	state = frappe.db.get_value(EXECUTION_DOCTYPE, {"kot": kot}, "state") or ""
+	if row.get("docstatus") != 1 or row.get("type") in ("Cancelled", "Partially cancelled") or state.startswith("CANCELLED_"):
+		raise ExecutionError(INVALID_EXECUTION_TRANSITION, _("KOT {0} is cancelled or not submitted").format(kot))
+
+
 def _require_kot_branch_scope(branch, user=None):
 	"""Require the KOT branch to match the user's server-side branch scope."""
 	from ury.ury_pos.api import getBranch
@@ -325,6 +338,7 @@ def _transition(kot, target_state, idempotency_key, actor_field, timestamp_field
 
 	branch, company, production_unit = _kot_scope(kot)
 	_require_kot_branch_scope(branch, actor)
+	_require_kot_open(kot)  # VEYQON: K-14
 
 	# Step 4: lock any existing row for this KOT before reading its state,
 	# so two concurrent callers serialize on this SELECT ... FOR UPDATE.

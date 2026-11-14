@@ -6,6 +6,10 @@ import requests
 import json
 from frappe.model.document import Document
 
+# VEYQON: K-1 KDS events go to the URY KOT doctype room (joined via a read-checked
+# doctype_subscribe), not the site room every System User socket is in.
+KOT_REALTIME_ROOM = "doctype:URY KOT"
+
 
 class URYKOT(Document):
     def on_submit(self):
@@ -119,6 +123,7 @@ class URYKOT(Document):
         frappe.publish_realtime(
             kot_channel,
             {"kot": kotjson, "audio_file": audio_file, "last_kot_time": time},
+            room=KOT_REALTIME_ROOM,  # VEYQON: K-1 not the site room
         )
         frappe.cache().set_value(cache_key, self.time)
 

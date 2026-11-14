@@ -25,6 +25,7 @@ from ury.ury.api.ury_kot_execution_service import (
 	_kot_scope,
 	_require_execution_doctype,
 	_require_kot,
+	_require_kot_open,
 	append_audit,
 )
 
@@ -425,6 +426,7 @@ def _transition(kot_item, target_state, idempotency_key, actor_field, timestamp_
 	if kot:
 		branch, company, _production_unit = _kot_scope(kot)
 		_require_execution_actor(actor, branch, company)
+		_require_kot_open(kot)  # VEYQON: K-14
 	prior = _find_prior_result(kot_item, target_state, idempotency_key)
 	if prior:
 		return _result_dict(prior, idempotent=True)

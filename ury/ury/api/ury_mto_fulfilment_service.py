@@ -125,6 +125,7 @@ V3-71's order exactly):
 import json
 
 import frappe
+from ury.ury.api.veyqon_actor import session_actor  # VEYQON: S10-16
 from frappe import _
 
 from ury.ury.api.ury_kot_execution_service import READY, SERVED
@@ -358,7 +359,7 @@ def fulfil_mto_order(kot, item_code, qty, reservation_group_ref, actor=None, bat
 	orders' MTO fulfilments into one micro-batch/production run. This
 	function fulfils exactly one (kot, item_code) pair per call.
 	"""
-	actor = actor or frappe.session.user
+	actor = session_actor(actor)  # VEYQON: S10-16 client actor never trusted
 
 	_require_fulfilment_doctype()
 	_require_kot(kot)

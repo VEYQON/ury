@@ -31,6 +31,7 @@ called by a distinct authorized role and flips status to "Authorized".
 import json
 
 import frappe
+from ury.ury.api.veyqon_actor import session_actor  # VEYQON: S10-16
 from frappe import _
 
 from ury.ury.api.ury_issue_authorization import ISSUE_AUTH_DOCTYPE
@@ -69,7 +70,7 @@ def capture_wastage(
     quantity that would exceed the authorization's currently-held amount
     (authorized_qty - already-approved-wasted - already-approved-returned).
     """
-    actor = actor or frappe.session.user
+    actor = session_actor(actor)  # VEYQON: S10-16 client actor never trusted
     _require_role(actor, CAPTURE_ROLES, "capture wastage")
     if not frappe.has_permission(WASTAGE_DOCTYPE, "create", user=actor):
         frappe.throw(_("Not permitted to create Issue Wastage"), frappe.PermissionError)
@@ -138,7 +139,7 @@ def reject_wastage(wastage, actor=None):
 
 
 def _resolve_wastage(wastage, actor, approve):
-    actor = actor or frappe.session.user
+    actor = session_actor(actor)  # VEYQON: S10-16 client actor never trusted
     _require_role(actor, APPROVE_ROLES, "approve/reject wastage")
     if not frappe.has_permission(WASTAGE_DOCTYPE, "write", user=actor):
         frappe.throw(_("Not permitted to approve/reject Issue Wastage"), frappe.PermissionError)
@@ -214,7 +215,8 @@ def held_quantity(auth_doc, exclude_wastage=None):
     live-aggregation pattern); Draft/Rejected wastage never reduces this.
     """
     authorized_qty = auth_doc.get("authorized_qty") or 0
-    already_wasted = _sum_authorized(
+    # VEYQON: S10-17 URY Wastage has no `wasted_qty` column; qty lives in the items child table.
+    already_wasted = _sum_live_if_exists(
         WASTAGE_DOCTYPE,
         {"issue_authorization": auth_doc.get("name"), "status": "Authorized"},
         "wasted_qty",
@@ -228,19 +230,7 @@ def held_quantity(auth_doc, exclude_wastage=None):
     return max(authorized_qty - already_wasted - already_returned, 0)
 
 
-def _sum_authorized(doctype, filters, fieldname, exclude_name=None):
-    rows = frappe.get_all(doctype, filters=filters, fields=["name", fieldname])
-    total = 0
-    for row in rows:
-        name = row.get("name") if isinstance(row, dict) else row["name"]
-        if exclude_name and name == exclude_name:
-            continue
-        value = row.get(fieldname) if isinstance(row, dict) else row[fieldname]
-        total += value or 0
-    return total
-
-
-def _sum_live_if_exists(doctype, filters, fieldname):
+def _sum_live_if_exists(doctype, filters, fieldname, exclude_name=None):
     if not frappe.db.exists("DocType", doctype):
         return 0
     # URY Wastage stores items in child table now
@@ -254,6 +244,9 @@ def _sum_live_if_exists(doctype, filters, fieldname):
         if component_item:
             conditions.append("i.`item_code` = %(component_item)s")
             query_filters["component_item"] = component_item
+        if exclude_name:  # VEYQON: S10-17
+            conditions.append("w.`name` != %(exclude_name)s")
+            query_filters["exclude_name"] = exclude_name
             
         where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         query = f"""

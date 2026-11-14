@@ -143,6 +143,42 @@ def getBranch():
 
     return branch_name
 
+
+# VEYQON: shared-tenant gates for POS / Captain writes (P-1, P-2, P-4/C-1, P-5, P-9).
+# Administrator / System Manager pass, as everywhere else in URY.
+def is_pos_superuser():
+    return frappe.session.user == "Administrator" or "System Manager" in frappe.get_roles()
+
+
+def assert_user_branch(branch, message=None):
+    """Throw PermissionError unless `branch` is the session user's URY branch."""
+    if is_pos_superuser():
+        return
+    if not branch or branch != getBranch():
+        frappe.throw(message or _("Not permitted outside your branch."), frappe.PermissionError)
+
+
+def has_pos_profile_role(pos_profiles, fields=("role_allowed_for_billing",)):
+    """True if the session user holds a role listed in one of these POS Profile role tables."""
+    if is_pos_superuser():
+        return True
+    if isinstance(pos_profiles, str):
+        pos_profiles = [pos_profiles]
+    if not pos_profiles:
+        return False
+    allowed = frappe.get_all(
+        "Role Permitted",
+        filters={"parenttype": "POS Profile", "parent": ["in", list(pos_profiles)], "parentfield": ["in", list(fields)]},
+        pluck="role",
+    )
+    return bool(set(allowed) & set(frappe.get_roles()))
+
+
+def assert_billing_user(pos_profile, message=None):
+    if not has_pos_profile_role(pos_profile):
+        frappe.throw(message or _("Not permitted to bill on this POS Profile."), frappe.PermissionError)
+
+
 @frappe.whitelist()
 def getBranchRoom():
     user = frappe.session.user
@@ -1353,6 +1389,12 @@ def create_pos_opening_entry(pos_profile: str, company: str = None, balance_deta
 
     if not frappe.has_permission("POS Profile", "read", doc=pos_profile_doc):
         frappe.throw(_("Not permitted to use this POS Profile."), frappe.PermissionError)
+
+    # VEYQON: P-9 — same user rule as _get_allowed_pos_profiles, and the profile must be on the user's branch.
+    profile_users = {row.user for row in (pos_profile_doc.get("applicable_for_users") or [])}
+    if profile_users and frappe.session.user not in profile_users and not is_pos_superuser():
+        frappe.throw(_("You are not a user of this POS Profile."), frappe.PermissionError)
+    assert_user_branch(pos_profile_doc.branch, _("This POS Profile belongs to another branch."))
 
     # U24: derive company from the resolved POS Profile the same way
     # branch/restaurant already are, rather than trusting a caller-supplied

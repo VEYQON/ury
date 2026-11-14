@@ -86,6 +86,8 @@ def update_agent_config(provider=None, model=None, temperature=None, top_p=None,
 		)
 
 	doc = frappe.get_doc("Agent", agent_name)
+	# VEYQON: W-1 -- the HUF Agent is shared site-wide; need real write permission on it.
+	doc.check_permission("write")
 
 	# Treat an empty string the same as "not provided" -- the frontend's
 	# provider/model selects reset to '' while their options are (re)loading,
@@ -102,7 +104,7 @@ def update_agent_config(provider=None, model=None, temperature=None, top_p=None,
 	if enable_prompt_caching is not None:
 		doc.enable_prompt_caching = 1 if _coerce_bool(enable_prompt_caching) else 0
 
-	doc.save(ignore_permissions=True)
+	doc.save()
 
 	return {
 		"available": True,
@@ -161,7 +163,10 @@ def set_provider_api_key(provider, api_key):
 		frappe.throw(_("AI Provider {0} does not exist").format(frappe.bold(provider)))
 
 	doc = frappe.get_doc("AI Provider", provider)
+	# VEYQON: W-1 -- AI Provider keys are tenant-wide (Agent-Q and other HUF agents use
+	# them); a URY manager may not overwrite one without write permission on it.
+	doc.check_permission("write")
 	doc.api_key = api_key.strip()
-	doc.save(ignore_permissions=True)
+	doc.save()
 
 	return {"success": True}

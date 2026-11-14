@@ -64,6 +64,7 @@ class TestMarkReadyManagerOverrideGate(FrappeTestCase):
 			patch(f"{MODULE}.frappe.get_roles", return_value=["Employee"]), \
 			patch(f"{MODULE}._find_prior_result", return_value=None), \
 			patch(f"{MODULE}._kot_scope", return_value=("Branch A", "Company A", None)), \
+			patch(f"{MODULE}._require_kot_open"), \
 			patch(f"{MODULE}._require_kot_branch_scope"), \
 			patch(f"{MODULE}._lock_execution_row", return_value=None):
 			mock_session.user = "waiter@ury.test"
@@ -85,6 +86,7 @@ class TestMarkReadyManagerOverrideGate(FrappeTestCase):
 			patch(f"{MODULE}.frappe.get_roles", return_value=["URY Manager"]), \
 			patch(f"{MODULE}._find_prior_result", return_value=None), \
 			patch(f"{MODULE}._kot_scope", return_value=("Branch A", "Company A", None)), \
+			patch(f"{MODULE}._require_kot_open"), \
 			patch(f"{MODULE}._require_kot_branch_scope"), \
 			patch(f"{MODULE}._lock_execution_row", return_value=None), \
 			patch(f"{MODULE}.frappe.get_doc", return_value=fake_doc), \
@@ -144,6 +146,7 @@ class TestBranchScopeGapFinding(FrappeTestCase):
 			patch(f"{MODULE}.frappe.get_roles", return_value=["Employee"]), \
 			patch(f"{MODULE}._find_prior_result", return_value=None), \
 			patch(f"{MODULE}._kot_scope", return_value=("Branch A", "Company A", None)), \
+			patch(f"{MODULE}._require_kot_open"), \
 			patch("ury.ury_pos.api.getBranch", return_value="Branch B"):
 			mock_session.user = "waiter-in-branch-b@ury.test"
 			with self.assertRaises(svc.ExecutionError) as ctx:
@@ -162,6 +165,7 @@ class TestBranchScopeGapFinding(FrappeTestCase):
 			patch(f"{MODULE}.frappe.get_roles", return_value=["Employee"]), \
 			patch(f"{MODULE}._find_prior_result", return_value=None), \
 			patch(f"{MODULE}._kot_scope", return_value=("Branch A", "Company A", None)), \
+			patch(f"{MODULE}._require_kot_open"), \
 			patch(f"{MODULE}._lock_execution_row", return_value=None), \
 			patch(f"{MODULE}.frappe.get_doc", return_value=fake_doc), \
 			patch(f"{MODULE}.append_audit"), \

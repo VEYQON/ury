@@ -15,6 +15,7 @@ WEBHOOK_PATHS = frozenset(
 	}
 )
 SECRET_CONFIG_KEY = "ury_whatsapp_app_secret"
+CHAIRMAN_ACCOUNT_KEY = "ury_chairman_whatsapp_account"  # same key as chairman_whatsapp.ACCOUNT_CONF_KEY
 _PREFIX = "sha256="
 
 
@@ -48,6 +49,10 @@ def guard_whatsapp_webhook(*args, **kwargs):
 		return  # GET verify-token challenge untouched
 
 	secret = frappe.conf.get(SECRET_CONFIG_KEY) or ""
+	# VEYQON: W-6 -- enforce only when URY uses WhatsApp (secret set, or the chairman
+	# channel is on). Otherwise other apps' frappe_whatsapp webhooks pass, as before URY.
+	if not secret and not frappe.conf.get(CHAIRMAN_ACCOUNT_KEY):
+		return
 	raw = request.get_data(cache=True) or b""  # cached so form parsing still works
 	header = request.headers.get("X-Hub-Signature-256")
 	if not verify_signature(raw, header, secret):

@@ -183,7 +183,7 @@ class TestPermissionTiers(unittest.TestCase):
         patches = _base_patches(posted_costs={("POS-INV-001", "Burger"): 120.0})
         _start_all(patches)
         try:
-            with _RolesPatch(["Finance"]):
+            with _RolesPatch(["System Manager"]):
                 result = get_department_profitability("URY Co", "URY Branch", "2026-08-28")
         finally:
             _stop_all(patches)
@@ -198,7 +198,7 @@ class TestPermissionTiers(unittest.TestCase):
         patches = _base_patches(posted_costs={("POS-INV-001", "Burger"): 120.0})
         _start_all(patches)
         try:
-            with _RolesPatch(["Finance"]):
+            with _RolesPatch(["System Manager"]):
                 result = get_department_profitability("URY Co", "URY Branch", "2026-08-28")
         finally:
             _stop_all(patches)
@@ -213,7 +213,7 @@ class TestPermissionTiers(unittest.TestCase):
         patches = _base_patches(posted_costs={("POS-INV-001", "Burger"): 120.0})
         _start_all(patches)
         try:
-            with _RolesPatch(["Finance"]):
+            with _RolesPatch(["System Manager"]):
                 result = get_department_profitability("URY Co", "URY Branch", "2026-08-28")
         finally:
             _stop_all(patches)
@@ -240,7 +240,7 @@ class TestPermissionTiers(unittest.TestCase):
         patches = _base_patches()
         _start_all(patches)
         try:
-            with _RolesPatch(["Finance"]):
+            with _RolesPatch(["System Manager"]):
                 result = get_department_profitability("URY Co", "URY Branch", "2026-08-28")
         finally:
             _stop_all(patches)
@@ -292,7 +292,7 @@ class TestPermissionTiers(unittest.TestCase):
         patches = _base_patches()
         _start_all(patches)
         try:
-            with _RolesPatch(["Finance"]):
+            with _RolesPatch(["System Manager"]):
                 result = get_department_profitability("URY Co", "URY Branch", "2026-08-28")
         finally:
             _stop_all(patches)
@@ -361,7 +361,7 @@ class TestBranchAndCompanyScope(unittest.TestCase):
         with patch(f"{MOD}.frappe.get_all", return_value=[_plan()]), \
              patch(f"{MOD}.frappe.db.get_value", side_effect=get_value_side_effect), \
              patch(f"{MOD}._read_pos_invoice_lines", return_value=[]), \
-             _RolesPatch(["Finance"]):
+             _RolesPatch(["System Manager"]):
             with self.assertRaises(frappe.ValidationError) as ctx:
                 get_department_profitability("URY Co", "URY Branch", "2026-08-28")
         self.assertIn(DEPARTMENT_SCOPE_MISMATCH, str(ctx.exception))
@@ -377,7 +377,7 @@ class TestBranchAndCompanyScope(unittest.TestCase):
         with patch(f"{MOD}.frappe.get_all", mock_get_all), \
              patch(f"{MOD}.frappe.db.get_value", return_value="Company A"), \
              patch(f"{MOD}._read_pos_invoice_lines", return_value=[_invoice_line()]) as mock_read, \
-             _RolesPatch(["Finance"]):
+             _RolesPatch(["System Manager"]):
             get_department_profitability("Company A", "Shared Branch Name", "2026-08-28")
 
         plan_call_filters = mock_get_all.call_args.kwargs["filters"]
@@ -475,7 +475,7 @@ class TestUnattributedAndMissingCost(unittest.TestCase):
         )
         _start_all(patches)
         try:
-            with _RolesPatch(["Finance"]):
+            with _RolesPatch(["System Manager"]):
                 result = get_department_profitability("URY Co", "URY Branch", "2026-08-28")
         finally:
             _stop_all(patches)
@@ -491,7 +491,7 @@ class TestUnattributedAndMissingCost(unittest.TestCase):
         patches = _base_patches(plans=[_plan(snapshot=SNAPSHOT_KITCHEN)], invoice_lines=[_invoice_line()])
         _start_all(patches)
         try:
-            with _RolesPatch(["Finance"]):
+            with _RolesPatch(["System Manager"]):
                 result = get_department_profitability("URY Co", "URY Branch", "2026-08-28")
         finally:
             _stop_all(patches)
@@ -508,7 +508,7 @@ class TestUnattributedAndMissingCost(unittest.TestCase):
         patches = _base_patches(plans=[])
         _start_all(patches)
         try:
-            with _RolesPatch(["Finance"]):
+            with _RolesPatch(["System Manager"]):
                 result = get_department_profitability("URY Co", "URY Branch", "2026-08-28")
         finally:
             _stop_all(patches)
@@ -559,7 +559,7 @@ class TestPlanVsActual(unittest.TestCase):
         patches = _base_patches(plans=plans, invoice_lines=invoice_lines)
         _start_all(patches)
         try:
-            with _RolesPatch(["Finance"]):
+            with _RolesPatch(["System Manager"]):
                 result = get_plan_vs_actual("URY Co", "URY Branch", "2026-08-28")
         finally:
             _stop_all(patches)
@@ -574,7 +574,7 @@ class TestPlanVsActual(unittest.TestCase):
         patches = _base_patches(plans=[])
         _start_all(patches)
         try:
-            with _RolesPatch(["Finance"]):
+            with _RolesPatch(["System Manager"]):
                 result = get_plan_vs_actual("URY Co", "URY Branch", "2026-08-28")
         finally:
             _stop_all(patches)

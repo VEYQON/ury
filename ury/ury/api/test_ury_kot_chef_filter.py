@@ -18,6 +18,12 @@ class TestGetFilteredKotList(FrappeTestCase):
     `test_ury_kot_routing.py` for V3-51.
     """
 
+    def setUp(self):
+        # VEYQON: S10-16 `user` must equal the session user; these tests cover filtering only.
+        patcher = patch(f"{MODULE}.session_actor", side_effect=lambda user: user)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _base_fieldnames(self, doctype):
         if doctype == "URY Production Unit":
             return {"name", "branch", "lead_chef", "enabled"}

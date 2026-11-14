@@ -89,6 +89,7 @@ class TestCancelBeforeStartIsIntentionallyUngated(FrappeTestCase):
 			patch(f"{MODULE}._require_kot"), \
 			patch(f"{MODULE}.frappe.session") as mock_session, \
 			patch(f"{MODULE}._kot_scope", return_value=("Branch A", "Company A", None)), \
+			patch(f"{MODULE}._require_kot_actor"), \
 			patch(f"{MODULE}._current_state", return_value=(None, svc.QUEUED)), \
 			patch(f"{MODULE}._write_cancellation", return_value={"name": "UKE-1"}), \
 			patch(f"{MODULE}.frappe.get_roles") as mock_roles:

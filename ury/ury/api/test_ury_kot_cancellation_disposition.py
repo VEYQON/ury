@@ -34,6 +34,18 @@ from ury.ury.api.ury_kot_cancellation_service import (
 
 MODULE = "ury.ury.api.ury_kot_cancellation_service"
 
+# VEYQON: K-4 role/branch gate is covered in hooks/test_veyqon_kitchen_safety.py;
+# these tests cover disposition logic only.
+_actor_gate = patch(f"{MODULE}._require_kot_actor")
+
+
+def setUpModule():
+	_actor_gate.start()
+
+
+def tearDownModule():
+	_actor_gate.stop()
+
 
 def _existence_side_effect(kot_exists=True):
 	def _exists(doctype, name=None):

@@ -149,7 +149,8 @@ class _SimulatedPaymentTerminalProvider(PaymentTerminalProvider):
 _payment_terminal_provider = _NoOpPaymentTerminalProvider()
 
 
-@frappe.whitelist()
+# VEYQON: S9-18 -- not whitelisted: any signed-in user could switch kiosks to auto-approve.
+# Call it from bench console or a test only.
 def register_simulated_terminal_provider():
 	"""Opt-in helper for testing/demo: installs _SimulatedPaymentTerminalProvider
 	as the active provider. Never called automatically -- the default stays

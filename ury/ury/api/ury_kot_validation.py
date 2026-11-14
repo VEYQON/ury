@@ -4,6 +4,7 @@ import json
 from frappe import _
 from frappe.utils import get_datetime, datetime
 from ury.ury_pos.api import getBranch
+from ury.ury.doctype.ury_kot.ury_kot import KOT_REALTIME_ROOM  # VEYQON: K-1
 
 
 SUPERVISOR_ROLES = {"URY Manager", "System Manager"}
@@ -192,6 +193,7 @@ def create_kot_log(kotdoc, invoice):
             "branch": posInvoice.branch,
             "production": kotdoc.production,
         },
+        room=KOT_REALTIME_ROOM,  # VEYQON: K-1 not the site room
     )
 
 

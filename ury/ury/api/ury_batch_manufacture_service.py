@@ -68,6 +68,7 @@ Authorization and locking conventions are copied from
 from __future__ import annotations
 
 import frappe
+from ury.ury.api.veyqon_actor import session_actor  # VEYQON: S10-16
 from frappe import _
 from frappe.utils import flt
 
@@ -301,10 +302,13 @@ def _submit_stock_entry(*, company, stock_entry_type, items, config_name, idempo
 
 
 def _load_and_validate_config(config_name, expected_sourcing_mode, actor):
-	actor = actor or frappe.session.user
+	actor = session_actor(actor)  # VEYQON: S10-16 client actor never trusted
 	_authorize_batch_action(actor, config_name)
 
 	config_row = _lock_config(config_name)
+	# VEYQON: K-3 the config's branch must be the caller's active branch.
+	from ury.ury.api.ury_kot_execution_service import _require_kot_branch_scope
+	_require_kot_branch_scope(config_row.get("branch"), actor)
 
 	if not config_row.get("active"):
 		raise BatchManufactureError(

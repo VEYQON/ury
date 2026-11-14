@@ -88,7 +88,9 @@ NO_ACCESS_ROLES = {"Cashier", "URY Cashier", "Captain", "URY Captain"}
 QUANTITY_ONLY_ROLES = {"Chef", "URY Chef", "Production", "URY Production"}
 DEPARTMENT_MANAGER_ROLES = {"Department Manager", "URY Department Manager"}
 BRANCH_MANAGER_ROLES = {"URY Manager"}
-FULL_ACCESS_ROLES = {"Finance", "Finance Manager", "URY Finance", "Inventory Manager", "System Manager"}
+# VEYQON: GF-1 -- only System Manager. URY ships no Finance / Inventory Manager roles; on a
+# shared tenant those names belong to other apps and must not unlock every branch's GP.
+FULL_ACCESS_ROLES = {"System Manager"}
 
 COST_FIELDS = (
     "posted_cost",
@@ -307,6 +309,10 @@ def _resolve_access(company, branch, department):
 
     if roles & FULL_ACCESS_ROLES or is_admin:
         return "full", False, department
+
+    # VEYQON: GF-1 -- a no-access role wins over any granting role (was checked last).
+    if roles & NO_ACCESS_ROLES:
+        frappe.throw(_("Not permitted to access department profitability"), frappe.PermissionError)
 
     if roles & BRANCH_MANAGER_ROLES:
         assigned_branch = frappe.db.get_value("Employee", {"user_id": frappe.session.user}, "branch")

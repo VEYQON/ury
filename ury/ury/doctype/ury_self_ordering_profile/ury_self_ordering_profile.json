@@ -202,7 +202,7 @@
   },
   {
    "fieldname": "qr_signing_secret",
-   "fieldtype": "Data",
+   "fieldtype": "Password",
    "hidden": 1,
    "label": "QR Signing Secret",
    "read_only": 1,
@@ -213,7 +213,7 @@
   {
    "description": "Shared 4-6 digit PIN staff use to authorize a portable/shared tablet's table assignment (assign_device_table). One PIN per profile for this MVP, not per-staff-member.",
    "fieldname": "staff_pin",
-   "fieldtype": "Data",
+   "fieldtype": "Password",
    "label": "Staff PIN",
    "no_copy": 1,
    "print_hide": 1,
@@ -222,7 +222,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-08-19 00:00:00.000000",
+ "modified": "2026-11-14 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "URY",
  "name": "URY Self Ordering Profile",

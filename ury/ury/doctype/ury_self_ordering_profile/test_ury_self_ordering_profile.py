@@ -45,27 +45,29 @@ class TestURYSelfOrderingProfile(FrappeTestCase):
 
 	def test_before_insert_generates_qr_signing_secret(self):
 		profile = self._make_profile()
-		self.assertTrue(profile.qr_signing_secret)
+		self.assertTrue(profile.get_password("qr_signing_secret"))
 		# frappe.generate_hash(length=48) -- confirm the length contract,
 		# since api/self_ordering.py's token signing depends on secret
 		# entropy, not just presence.
-		self.assertEqual(len(profile.qr_signing_secret), 48)
+		self.assertEqual(len(profile.get_password("qr_signing_secret")), 48)
 
 	def test_qr_signing_secret_is_unique_per_profile(self):
 		profile_a = self._make_profile()
 		profile_b = self._make_profile()
-		self.assertNotEqual(profile_a.qr_signing_secret, profile_b.qr_signing_secret)
+		self.assertNotEqual(profile_a.get_password("qr_signing_secret"), profile_b.get_password("qr_signing_secret"))
 
 	def test_explicit_qr_signing_secret_is_not_overwritten(self):
 		# before_insert only fills the secret "if not self.qr_signing_secret"
 		# -- a caller-supplied value must survive.
 		profile = self._make_profile(qr_signing_secret="explicit-secret-value")
-		self.assertEqual(profile.qr_signing_secret, "explicit-secret-value")
+		self.assertEqual(profile.get_password("qr_signing_secret"), "explicit-secret-value")
 
 	def test_secret_is_not_regenerated_on_update(self):
 		profile = self._make_profile()
-		original_secret = profile.qr_signing_secret
+		original_secret = profile.get_password("qr_signing_secret")
 		profile.enabled = 0
 		profile.save()
 		profile.reload()
-		self.assertEqual(profile.qr_signing_secret, original_secret)
+		self.assertEqual(profile.get_password("qr_signing_secret"), original_secret)
+		# VEYQON: S9-16 -- the column itself holds only asterisks.
+		self.assertEqual(set(frappe.db.get_value("URY Self Ordering Profile", profile.name, "qr_signing_secret")), {"*"})

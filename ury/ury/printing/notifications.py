@@ -42,7 +42,7 @@ def notify_printer_status(printer_name, is_online, reasons=None):
         "reasons": reasons,
     }
 
-    frappe.publish_realtime("printer_health_alert", payload)
+    frappe.publish_realtime("printer_health_alert", payload, room="doctype:URY Print Job")  # VEYQON: K-1/C-13 not the site room
 
     frappe.logger("printing").info(
         {
@@ -256,7 +256,7 @@ def notify_long_running_print(
         }
         event_name = "print_long_running"
 
-    frappe.publish_realtime(event_name, payload)
+    frappe.publish_realtime(event_name, payload, room="doctype:URY Print Job")  # VEYQON: K-1/C-13 not the site room
 
     frappe.logger("printing").info(
         {

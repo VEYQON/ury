@@ -95,9 +95,11 @@ a reservation status transition, not a stock mutation.
 """
 
 import frappe
+from ury.ury.api.veyqon_actor import session_actor  # VEYQON: S10-16
 from frappe import _
 
 from ury.ury.api.ury_kot_execution_service import (
+	BRANCH_SCOPE_MISMATCH,
 	CANCELLED_AFTER_READY,
 	CANCELLED_AFTER_START,
 	CANCELLED_BEFORE_START,
@@ -210,6 +212,12 @@ def _verify_manager_confirmation(manager_confirmed_by):
 # ---------------------------------------------------------------------------
 
 
+def _require_kot_actor(actor, branch, company):
+	"""VEYQON: K-4 the kitchen/manager role and branch scope used for item execution."""
+	from ury.ury.api.ury_kot_item_execution_service import _require_execution_actor
+	_require_execution_actor(actor, branch, company)
+
+
 def _current_state(kot):
 	"""Lock and read the current `URY KOT Execution` state for `kot`.
 
@@ -279,9 +287,10 @@ def cancel_before_start(kot, actor=None, reason=None, reservation_name=None):
 	"""
 	_require_execution_doctype()
 	_require_kot(kot)
-	actor = actor or frappe.session.user
+	actor = session_actor(actor)  # VEYQON: S10-16 client actor never trusted
 
 	branch, company, production_unit = _kot_scope(kot)
+	_require_kot_actor(actor, branch, company)  # VEYQON: K-4 role + branch scope
 
 	locked, current_state = _current_state(kot)
 	if current_state != QUEUED:
@@ -295,6 +304,9 @@ def cancel_before_start(kot, actor=None, reason=None, reservation_name=None):
 
 	released = None
 	if reservation_name:
+		# VEYQON: K-4/P-8 only a reservation of this KOT's branch can be released.
+		if frappe.db.get_value(ury_reservation_service.RESERVATION_DOCTYPE, reservation_name, "branch") != branch:
+			raise CancellationError(BRANCH_SCOPE_MISMATCH, _("Reservation {0} is not in KOT branch {1}").format(reservation_name, branch))
 		try:
 			released = ury_reservation_service.release_reservation(reservation_name, reason=reason)
 		except frappe.ValidationError:
@@ -331,11 +343,12 @@ def cancel_after_start(kot, actor=None, reason=None, manager_confirmed_by=None):
 	"""
 	_require_execution_doctype()
 	_require_kot(kot)
-	actor = actor or frappe.session.user
+	actor = session_actor(actor)  # VEYQON: S10-16 client actor never trusted
 
 	confirmed_by = _verify_manager_confirmation(manager_confirmed_by)
 
 	branch, company, production_unit = _kot_scope(kot)
+	_require_kot_actor(actor, branch, company)  # VEYQON: K-4 role + branch scope
 
 	locked, current_state = _current_state(kot)
 	if current_state != IN_PREPARATION:
@@ -405,11 +418,12 @@ def cancel_after_ready(kot, actor=None, reason=None, manager_confirmed_by=None):
 	"""
 	_require_execution_doctype()
 	_require_kot(kot)
-	actor = actor or frappe.session.user
+	actor = session_actor(actor)  # VEYQON: S10-16 client actor never trusted
 
 	confirmed_by = _verify_manager_confirmation(manager_confirmed_by)
 
 	branch, company, production_unit = _kot_scope(kot)
+	_require_kot_actor(actor, branch, company)  # VEYQON: K-4 role + branch scope
 
 	locked, current_state = _current_state(kot)
 	if current_state != READY:
@@ -573,7 +587,7 @@ def resolve_cancellation_disposition(kot, item_row_name, disposition, qty, actor
 	double-processing (e.g. double-counting a wastage qty).
 	"""
 	_require_kot(kot)
-	actor = actor or frappe.session.user
+	actor = session_actor(actor)  # VEYQON: S10-16 client actor never trusted
 
 	if disposition not in (_RETURN_TO_STOCK, _WASTE):
 		raise CancellationError(
@@ -611,6 +625,7 @@ def resolve_cancellation_disposition(kot, item_row_name, disposition, qty, actor
 		)
 
 	branch, company, production_unit = _kot_scope(kot)
+	_require_kot_actor(actor, branch, company)  # VEYQON: K-4 role + branch scope
 
 	result = {
 		"kot": kot,

@@ -29,6 +29,18 @@ from ury.ury.api.ury_pos_invoice_qty_reduction import (
 
 MODULE = "ury.ury.api.ury_pos_invoice_qty_reduction"
 
+# VEYQON: C-3 the order access gate is covered in hooks/test_veyqon_kitchen_safety.py;
+# these tests cover the reduction logic only.
+_access_gate = patch(f"{MODULE}._require_order_reduction_access")
+
+
+def setUpModule():
+	_access_gate.start()
+
+
+def tearDownModule():
+	_access_gate.stop()
+
 
 def _pos_invoice_doc(
 	name="INV-001",

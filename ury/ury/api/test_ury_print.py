@@ -17,6 +17,19 @@ from ury.ury.api.ury_print import (
 )
 
 
+# VEYQON: P-5 — run these as a superuser so the billing-role / branch gate does not need
+# fixtures; the gate itself is covered in ury/ury/hooks/test_veyqon_pos_safety.py.
+_superuser = patch("ury.ury_pos.api.is_pos_superuser", return_value=True)
+
+
+def setUpModule():
+	_superuser.start()
+
+
+def tearDownModule():
+	_superuser.stop()
+
+
 class TestNetworkPrinting(FrappeTestCase):
 	@patch("ury.ury.api.ury_print.validate_print_permission")
 	@patch("ury.ury.api.ury_print.frappe.get_doc")
@@ -231,6 +244,12 @@ class TestQzPrintUpdate(FrappeTestCase):
 
 
 class TestPrintPosPage(FrappeTestCase):
+	def setUp(self):
+		# VEYQON: P-15 — print_pos_page publishes once per URY User of the branch.
+		patcher = patch("ury.ury.api.ury_print.frappe.get_all", return_value=["cashier@example.com"])
+		patcher.start()
+		self.addCleanup(patcher.stop)
+
 	@patch("ury.ury.api.ury_print.release_merge_cluster_tables")
 	@patch("ury.ury.api.ury_print.frappe.db.set_value")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")

@@ -50,6 +50,7 @@ from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_to_date, now_datetime
 
 from ury.ury.api.self_ordering import (
+	_get_profile_secret,
 	_sign,
 	generate_qr_token,
 	get_customer_menu,
@@ -64,7 +65,7 @@ def _forge_qr_token(profile, table):
 	"""Build a correctly-signed QR token for (profile, table) using the
 	profile's own secret — used to test the *server-side* branch-membership
 	check independently of `generate_qr_token()`'s own caller-side one."""
-	secret = frappe.db.get_value("URY Self Ordering Profile", profile, "qr_signing_secret")
+	secret = _get_profile_secret(profile)
 	payload = f"{profile}|{table or 'PICKUP'}"
 	raw = f"{payload}|{_sign(payload, secret)}"
 	return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
@@ -325,7 +326,7 @@ class TestGetOrderingContext(SelfOrderingSessionFixtures):
 		"""Cross-restaurant misuse: branch B's secret cannot authorize a
 		branch A profile/table pair."""
 		payload = f"{self.a['profile']}|{self.a['table']}"
-		b_secret = frappe.db.get_value("URY Self Ordering Profile", self.b["profile"], "qr_signing_secret")
+		b_secret = _get_profile_secret(self.b["profile"])
 		forged = base64.urlsafe_b64encode(
 			f"{payload}|{_sign(payload, b_secret)}".encode()
 		).decode().rstrip("=")

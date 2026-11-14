@@ -62,6 +62,7 @@ def _publish_status_update(metadata):
             "status": metadata.get("status"),
             "cups_state_reason": metadata.get("cups_state_reason", ""),
         },
+        room="doctype:URY Print Job",  # VEYQON: K-1/C-13 not the site room
     )
 
 

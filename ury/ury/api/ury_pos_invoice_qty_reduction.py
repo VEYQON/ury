@@ -78,6 +78,21 @@ def _allowed_order_types(pos_profile_doc):
 	return {part.strip() for part in raw.split(",") if part.strip()}
 
 
+def _require_order_reduction_access(pos_invoice, pos_profile):
+	"""VEYQON: C-3 same order ownership, branch and remove-sent-items rules as sync_order.
+
+	DocType write permission alone let any POS user cut lines on another
+	branch's or another waiter's printed order.
+	"""
+	from ury.ury.doctype.ury_order.ury_order import _can_remove_sent_items, _enforce_order_access
+	from ury.ury_pos.api import assert_user_branch
+
+	_enforce_order_access(pos_invoice, require_modify=True)
+	assert_user_branch(pos_invoice.branch)
+	if not _can_remove_sent_items(pos_profile, pos_invoice):
+		raise QtyReductionError(NOT_PERMITTED, _("Not permitted to reduce items already sent to the kitchen"))
+
+
 @frappe.whitelist()
 def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, reason=None):
 	"""Reduce (or fully remove, `new_qty=0`) one item's qty on a printed POS
@@ -135,6 +150,7 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 
 	order_type = pos_invoice.get("order_type")
 	pos_profile = frappe.get_doc("POS Profile", pos_invoice.pos_profile)
+	_require_order_reduction_access(pos_invoice, pos_profile)  # VEYQON: C-3
 	allowed_order_types = _allowed_order_types(pos_profile)
 
 	if order_type not in allowed_order_types:
