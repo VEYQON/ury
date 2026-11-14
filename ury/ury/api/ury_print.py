@@ -6,7 +6,7 @@ import os
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
-from ury.ury.doctype.ury_order.ury_order import release_merge_cluster_tables
+from ury.ury.doctype.ury_order.ury_order import _enforce_order_access, release_merge_cluster_tables
 
 no_cache = 1
 
@@ -43,6 +43,33 @@ def _assert_can_mark_bill_printed(invoice_doc):
 	assert_user_branch(invoice_doc.branch, _("Not permitted to print a bill of another branch."))
 
 
+def _assert_can_send_bill_to_printer(invoice_doc):
+	# VEYQON: review fix 2b6d20c7 #1 — Captains print the bill too (get_table_order_context
+	# print_bill), so a network bill print needs order access (waiter / elevated / billing, room)
+	# and the branch, not a billing role. qz_print_update / print_pos_page keep the billing gate.
+	from ury.ury_pos.api import assert_user_branch
+
+	if not frappe.has_permission("POS Invoice", "read", doc=invoice_doc):
+		frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
+	_enforce_order_access(invoice_doc, deny_message=_("Not permitted to print this bill"))
+	assert_user_branch(invoice_doc.branch, _("Not permitted to print a bill of another branch."))
+
+
+def _invoice_printers(invoice_doc):
+	"""VEYQON: review fix #7 — printers configured on the invoice's POS Profile or its table's room."""
+	parents = [("POS Profile", invoice_doc.pos_profile)]
+	if invoice_doc.restaurant_table:
+		parents.append(("URY Room", frappe.db.get_value("URY Table", invoice_doc.restaurant_table, "restaurant_room")))
+	return {
+		printer
+		for parenttype, parent in parents
+		if parent
+		for printer in frappe.get_all(
+			"URY Printer Settings", filters={"parent": parent, "parenttype": parenttype}, pluck="printer"
+		)
+	}
+
+
 def _record_bill_printed(invoice_doc, via):
 	# VEYQON: P-5 — who marked it printed (the comment owner is the session user).
 	invoice_doc.add_comment("Info", _("Bill marked printed ({0})").format(via))
@@ -74,18 +101,20 @@ def network_printing(
     doc=None,
     no_letterhead=0,
 ):
-    print_doc = frappe.get_doc(doctype, name)
+    # VEYQON: review fix #7 — bills only: every caller sends a POS Invoice and the job is a BILL
+    # (a BILL job marks the invoice printed on completion). KOTs print through the KOT path.
+    if doctype != "POS Invoice":
+        frappe.throw(_("Network printing is only available for POS Invoice bills."), frappe.PermissionError)
+    print_doc = frappe.get_doc("POS Invoice", name)
     validate_print_permission(print_doc)
+    _assert_can_send_bill_to_printer(print_doc)  # VEYQON: review fix #1
+    if printer_setting not in _invoice_printers(print_doc):
+        frappe.throw(_("Printer {0} is not configured for this bill.").format(printer_setting), frappe.PermissionError)
+    restaurant_table = print_doc.restaurant_table
 
-    restaurant_table = None
-    if doctype == "POS Invoice":
-        _assert_can_mark_bill_printed(print_doc)  # VEYQON: P-5 (a BILL job marks it printed on completion)
-        restaurant_table = frappe.db.get_value("POS Invoice", name, "restaurant_table")
-
-    if not print_format and doctype == "POS Invoice":
-        pos_profile = getattr(doc, "pos_profile", None) or frappe.db.get_value("POS Invoice", name, "pos_profile")
-        if pos_profile:
-            print_format = frappe.db.get_value("POS Profile", pos_profile, "print_format")
+    if not print_format:
+        if print_doc.pos_profile:
+            print_format = frappe.db.get_value("POS Profile", print_doc.pos_profile, "print_format")
         if not print_format:
             print_format = "POS Invoice"
 
@@ -94,7 +123,7 @@ def network_printing(
         doctype=doctype,
         name=name,
         print_format=print_format,
-        doc=doc,
+        doc=None,  # VEYQON: review fix #7 — ignore the client `doc`; the engine loads the invoice from the DB
         no_letterhead=no_letterhead,
         job_type="BILL",
         extra_metadata={
@@ -117,7 +146,7 @@ def network_printing(
 @frappe.whitelist()
 def select_network_printer(pos_profile, invoice_id, print_format=None):
     invoice_doc = frappe.get_doc("POS Invoice", invoice_id)
-    _assert_can_mark_bill_printed(invoice_doc)  # VEYQON: P-5
+    _assert_can_send_bill_to_printer(invoice_doc)  # VEYQON: review fix #1 (Captains print bills)
     pos_profile = invoice_doc.pos_profile or pos_profile  # VEYQON: P-5 — printers come from the invoice's own profile
 
     table = frappe.db.get_value("POS Invoice", invoice_id, "restaurant_table")

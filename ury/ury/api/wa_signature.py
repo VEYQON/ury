@@ -7,6 +7,7 @@ The app secret is read from site config key `ury_whatsapp_app_secret`.
 
 import hashlib
 import hmac
+import json
 
 WEBHOOK_PATHS = frozenset(
 	{
@@ -16,6 +17,7 @@ WEBHOOK_PATHS = frozenset(
 )
 SECRET_CONFIG_KEY = "ury_whatsapp_app_secret"
 CHAIRMAN_ACCOUNT_KEY = "ury_chairman_whatsapp_account"  # same key as chairman_whatsapp.ACCOUNT_CONF_KEY
+PHONE_ID_CONFIG_KEY = "ury_whatsapp_phone_number_id"  # VEYQON: W-6 optional, extra Meta phone_number_id(s) URY owns
 _PREFIX = "sha256="
 
 
@@ -38,6 +40,39 @@ def verify_signature(raw_body: bytes, header: str | None, app_secret: str) -> bo
 	return hmac.compare_digest(expected.encode("ascii"), given.encode("ascii"))
 
 
+def _as_list(value):
+	if not value:
+		return []
+	return list(value) if isinstance(value, (list, tuple, set)) else [value]
+
+
+def payload_phone_ids(raw_body):
+	"""Meta `phone_number_id` of every change in a webhook body; None if it is not a Meta JSON object."""
+	try:
+		payload = json.loads(raw_body or b"{}")
+		entries = payload.get("entry") or []
+		ids = set()
+		for entry in [entries] if isinstance(entries, dict) else entries:
+			changes = entry.get("changes") or []
+			for change in [changes] if isinstance(changes, dict) else changes:
+				phone_id = ((change.get("value") or {}).get("metadata") or {}).get("phone_number_id")
+				if phone_id:
+					ids.add(str(phone_id))
+		return ids
+	except (ValueError, TypeError, AttributeError):
+		return None
+
+
+def _ury_phone_ids(frappe):
+	"""phone_number_id of URY's WhatsApp Account(s) (chairman channel) plus any configured explicitly."""
+	ids = {str(p) for p in _as_list(frappe.conf.get(PHONE_ID_CONFIG_KEY))}
+	for account in _as_list(frappe.conf.get(CHAIRMAN_ACCOUNT_KEY)):
+		phone_id = frappe.db.get_value("WhatsApp Account", account, "phone_id")
+		if phone_id:
+			ids.add(str(phone_id))
+	return ids
+
+
 def guard_whatsapp_webhook(*args, **kwargs):
 	"""before_request hook. Raises frappe.PermissionError for bad POSTs to the webhook only."""
 	import frappe
@@ -54,6 +89,13 @@ def guard_whatsapp_webhook(*args, **kwargs):
 	if not secret and not frappe.conf.get(CHAIRMAN_ACCOUNT_KEY):
 		return
 	raw = request.get_data(cache=True) or b""  # cached so form parsing still works
+	# VEYQON: review fix W-6 -- enforce only for payloads addressed to URY's WhatsApp number(s).
+	# Other apps' accounts pass unchanged. Unknown URY ids or a non-Meta body: still enforced.
+	ury_ids = _ury_phone_ids(frappe)
+	if ury_ids:
+		ids = payload_phone_ids(raw)
+		if ids is not None and ids and not (ids & ury_ids):
+			return
 	header = request.headers.get("X-Hub-Signature-256")
 	if not verify_signature(raw, header, secret):
 		frappe.throw("Invalid webhook signature", frappe.PermissionError)

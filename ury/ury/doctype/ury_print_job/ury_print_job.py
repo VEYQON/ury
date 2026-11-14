@@ -75,6 +75,7 @@ class URYPrintJob(Document):
                     ),
                     "status": new_status,
                 },
+                room="doctype:URY Print Job",  # VEYQON: review fix #8 (K-1/C-13) not the site room
             )
 
         # If status transitioned to FAILED, publish failure alert to job_owner

@@ -410,6 +410,8 @@ class TestURYWaiterPrint(FrappeTestCase):
 		mock_print_by_server.assert_not_called()
 		mock_log_error.assert_called_once()
 
+	@patch("ury.ury.api.ury_kot_generate._assert_items_on_invoice", MagicMock())  # VEYQON
+	@patch("ury.ury.api.ury_kot_generate.assert_user_branch", MagicMock())
 	@patch("ury.ury.api.ury_waiter_print.print_combined_waiter_order_slip")
 	@patch("ury.ury.api.ury_kot_generate.process_items_for_cancel_kot")
 	@patch("ury.ury.api.ury_kot_generate.process_items_for_kot")

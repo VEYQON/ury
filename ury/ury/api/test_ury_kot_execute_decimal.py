@@ -13,6 +13,7 @@ G="ury.ury.api.ury_kot_generate"
 def run(cur, prev):
     with patch(f"{G}.frappe.get_doc") as gd, patch(f"{G}.frappe.has_permission", return_value=True), \
          patch(f"{G}.frappe.get_precision", return_value=3), \
+         patch(f"{G}.assert_user_branch"), patch(f"{G}._assert_items_on_invoice"), \
          patch(f"{G}.process_items_for_kot", return_value=["K"]) as pk, \
          patch(f"{G}.process_items_for_cancel_kot", return_value=["C"]) as pc, \
          patch("ury.ury.api.ury_waiter_print.print_combined_waiter_order_slip"):

@@ -10,6 +10,8 @@ from frappe.model.document import Document
 from frappe.utils import cint, flt, get_datetime
 from erpnext.controllers.queries import item_query
 from ury.ury_pos.api import getBranch, getBranchRoom, getRoom, posOpening
+from ury.ury_pos.api import assert_billing_user, assert_user_branch, has_pos_profile_role  # VEYQON: P-1/P-2/C-1
+from ury.ury.doctype.ury_kot.ury_kot import KOT_REALTIME_ROOM  # VEYQON: realtime room
 from ury.ury_pos.default_customer import get_default_customer_config, resolve_default_customer
 from ury.ury.api.ury_kot_generate import kot_execute
 from ury.ury.api.ury_kot_generate import process_items_for_cancel_kot
@@ -65,6 +67,9 @@ def merge_tables_batch(anchor_table, tables):
         frappe.throw(
             _("Table not found.")
         )
+
+    _assert_table_merge_access(anchor_table)  # VEYQON: P-4/C-1
+    _lock_tables([anchor_table, *targets])  # VEYQON: serialize concurrent merges
 
     # Start from anchor cluster only
     cluster, table_map = _get_merge_cluster(
@@ -152,6 +157,25 @@ def merge_tables_batch(anchor_table, tables):
     frappe.db.commit()
 
     return True
+
+
+def _assert_table_merge_access(table):
+    """VEYQON: P-4/C-1 merge/unmerge only on the user's branch, with URY Table write
+    or a transfer/billing role on one of that branch's POS Profiles."""
+    branch = frappe.db.get_value("URY Table", table, "branch")
+    assert_user_branch(branch, _("Not permitted to merge tables outside your branch."))
+    if frappe.has_permission("URY Table", "write"):
+        return
+    profiles = frappe.get_all("POS Profile", filters={"branch": branch}, pluck="name")
+    if not has_pos_profile_role(profiles, ("transfer_role_permissions", "role_allowed_for_billing")):
+        frappe.throw(_("Not permitted to merge or unmerge tables."), frappe.PermissionError)
+
+
+def _lock_tables(names):
+    # VEYQON: row locks so two merges/unmerges on the same tables cannot interleave.
+    frappe.db.get_values("URY Table", {"name": ["in", list(names)]}, "name", for_update=True)
+
+
 def _append_merged_partner(table_name, partner):
     merged = frappe.db.get_value(
         "URY Table",
@@ -476,9 +500,12 @@ def _has_open_pos_invoices_for_cluster(tables):
 @frappe.whitelist()
 def unmerge_tables(table):
 
+    _assert_table_merge_access(table)  # VEYQON: P-4/C-1
+
     cluster = _get_cluster_table_names(
         table
     )
+    _lock_tables(cluster)  # VEYQON
 
     if len(cluster) <= 1:
         frappe.throw(
@@ -2215,10 +2242,13 @@ def sync_order(
     for item_dict in priced_items:
         invoice.append("items", item_dict)
 
+    frappe.flags.ury_order_write = True  # VEYQON: C-4 sanctioned item change
     try:
         invoice.save()
     except Exception as e:
-        frappe.throw(f"Error while updating order: {e}")   
+        frappe.throw(f"Error while updating order: {e}")
+    finally:
+        frappe.flags.ury_order_write = False
 
     try:
         kot_execute(invoice.name, customer, table, items, past_item, comments)
@@ -2694,6 +2724,10 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
 
     order_type =  invoice_name = frappe.get_value("POS Invoice",invoice , "order_type")
     invoice = get_order_invoice(table, invoice, order_type, "Payments")
+    # VEYQON: P-1 billing role on the profile, invoice and profile on the user's branch.
+    assert_billing_user(pos_profile)
+    assert_user_branch(invoice.branch)
+    assert_user_branch(frappe.db.get_value("POS Profile", pos_profile, "branch"))
 
     if table:
         restaurant = get_restaurant_and_menu_name(table)
@@ -2769,7 +2803,11 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
 
     invoice.set_paid_amount()
     # invoice.owner = owner
-    invoice.save()
+    frappe.flags.ury_order_write = True  # VEYQON: C-4 sanctioned discount change
+    try:
+        invoice.save()
+    finally:
+        frappe.flags.ury_order_write = False
 
     if not submit_invoice:
         return {"name": invoice.name, "status": "Draft"}
@@ -2805,11 +2843,27 @@ def _submit_and_release_tables(invoice):
         )
 
 
+def _assert_fully_paid(doc):
+    """VEYQON: P-2 same rule as ERPNext's POS full-payment check: paid (change included)
+    plus write-off must cover rounded_total, or grand_total when rounding is off."""
+    if doc.is_return or frappe.db.get_value("POS Profile", doc.pos_profile, "allow_partial_payment"):
+        return
+    due = flt(doc.rounded_total) or flt(doc.grand_total)
+    if flt(due - flt(doc.paid_amount) - flt(doc.write_off_amount), 6) > 0:
+        frappe.throw(_("Invoice {0} is not fully paid.").format(doc.name))
+
+
 @frappe.whitelist()
 def submit_order_invoice(invoice):
     doc = frappe.get_doc("POS Invoice", invoice)
     if doc.docstatus == 1:
         return {"name": doc.name, "status": "Submitted"}
+
+    # VEYQON: P-2 submit right, billing role, own branch, fully paid.
+    frappe.has_permission("POS Invoice", "submit", doc=doc, throw=True)
+    assert_billing_user(doc.pos_profile)
+    assert_user_branch(doc.branch)
+    _assert_fully_paid(doc)
 
     _submit_and_release_tables(doc)
     return {"name": doc.name, "status": "Submitted"}
@@ -2887,4 +2941,4 @@ def change_table_in_kot(invoice, new_table, branch):
         frappe.db.set_value("URY KOT", kot.name, "restaurant_table", new_table)
         production = frappe.db.get_value("URY KOT", kot.name, "production")
         kot_channel = "{}_{}_{}".format("kot_update", branch, production)
-        frappe.publish_realtime(kot_channel)
+        frappe.publish_realtime(kot_channel, room=KOT_REALTIME_ROOM)  # VEYQON: not the site room

@@ -41,7 +41,7 @@ class TestSessionActor(FrappeTestCase):
 
 class TestWastageQtyFromChildTable(FrappeTestCase):
 	def test_held_quantity_sums_items_and_excludes_current(self):
-		auth = frappe._dict(name="IA-1", authorized_qty=10)
+		auth = frappe._dict(name="IA-1", authorized_qty=10, component_item="FLOUR")
 		with patch(f"{WASTE}.frappe.db.exists", return_value=True), \
 			 patch(f"{WASTE}.frappe.db.sql", return_value=[[4]], create=True) as sql, \
 			 patch(f"{WASTE}.frappe.get_all", return_value=[]):
@@ -50,6 +50,10 @@ class TestWastageQtyFromChildTable(FrappeTestCase):
 		self.assertIn("tabWastage Item", query)
 		self.assertIn("w.`name` != %(exclude_name)s", query)
 		self.assertEqual(params["exclude_name"], "W-1")
+		# review fix #9: only this component's rows, only Wastage Items of URY Wastage
+		self.assertIn("i.`item_code` = %(component_item)s", query)
+		self.assertIn("i.parenttype = %(parenttype)s", query)
+		self.assertEqual((params["component_item"], params["parenttype"]), ("FLOUR", "URY Wastage"))
 
 	def test_prior_quantities_joins_wastage_items_by_component(self):
 		def get_all(doctype, **kw):
@@ -177,20 +181,28 @@ class TestChefFilterUser(FrappeTestCase):
 
 
 class TestQtyReductionAccess(FrappeTestCase):
-	def _gate(self, can_remove=True, branch_error=None):
+	def _gate(self, can_remove=True, branch_error=None, billing=False):
 		import sys
 		from ury.ury.api import ury_pos_invoice_qty_reduction as qr
 
 		order = MagicMock(_can_remove_sent_items=MagicMock(return_value=can_remove))
-		pos_api = MagicMock(assert_user_branch=MagicMock(side_effect=branch_error))
+		pos_api = MagicMock(assert_user_branch=MagicMock(side_effect=branch_error),
+			has_pos_profile_role=MagicMock(return_value=billing))
 		inv = frappe._dict(name="INV-1", branch="B1")
 		with patch.dict(sys.modules, {"ury.ury.doctype.ury_order.ury_order": order, "ury.ury_pos.api": pos_api}):
 			qr._require_order_reduction_access(inv, frappe._dict(name="P1"))
-		order._enforce_order_access.assert_called_once_with(inv, require_modify=True)
+		# review fix #3: non-billing callers only while the order is modifiable; billing users on a printed bill
+		order._enforce_order_access.assert_called_once_with(inv, require_modify=not billing)
+		pos_api.has_pos_profile_role.assert_called_once_with("P1")
 		pos_api.assert_user_branch.assert_called_once_with("B1")
+		return order
 
 	def test_owner_in_branch_with_remove_right_passes(self):
 		self._gate()
+
+	def test_billing_user_passes_without_remove_right(self):
+		order = self._gate(can_remove=False, billing=True)
+		order._can_remove_sent_items.assert_not_called()
 
 	def test_no_remove_sent_items_right_refused(self):
 		from ury.ury.api.ury_pos_invoice_qty_reduction import QtyReductionError

@@ -106,6 +106,8 @@ frappe.ui.form.on('URY Order', {
 			$(this).prop('type', 'number');
 		})
 
+		// VEYQON: reload_ro is published to the POS Invoice doctype room now.
+		frappe.realtime.doctype_subscribe('POS Invoice');
 		frappe.realtime.on('reload_ro', (data) => {
 			if (frm.doc.last_invoice && data.name === frm.doc.last_invoice) {
 				frappe.dom.freeze(__('Order Completed'));

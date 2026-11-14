@@ -15,11 +15,12 @@ PRINT = "ury.ury.api.ury_print"
 SPC = "ury.ury.doctype.sub_pos_closing.sub_pos_closing"
 
 
-def _as(user, roles=()):
-	"""Patch the session user and roles seen by ury.ury_pos.api."""
+def _as(user, roles=(), branches=()):
+	"""Patch the session user, roles and extra URY User branches seen by ury.ury_pos.api."""
 	session = patch(f"{POS}.frappe.session", frappe._dict(user=user))
 	get_roles = patch(f"{POS}.frappe.get_roles", return_value=list(roles))
-	return session, get_roles
+	user_branches = patch(f"{POS}.user_branches", return_value=list(branches))
+	return session, get_roles, user_branches
 
 
 class _Ctx:
@@ -43,6 +44,16 @@ class TestBranchAndBillingHelpers(FrappeTestCase):
 		with _Ctx(*_as("c@x"), patch(f"{POS}.getBranch", return_value="B1")):
 			with self.assertRaises(frappe.PermissionError):
 				pos_api.assert_user_branch("B2")
+
+	def test_second_branch_of_multi_branch_user_passes(self):
+		# review fix #4: any of the user's URY User branches
+		with _Ctx(*_as("c@x", branches=["B1", "B2"]), patch(f"{POS}.getBranch", return_value="B1")):
+			pos_api.assert_user_branch("B2")
+
+	def test_user_branches_reads_every_row(self):
+		with patch(f"{POS}.frappe.session", frappe._dict(user="c@x")), 			 patch(f"{POS}.frappe.db.sql", return_value=[("B1",), ("B2",)], create=True) as sql:
+			self.assertEqual(pos_api.user_branches(), ["B1", "B2"])
+		self.assertEqual(sql.call_args[0][1], "c@x")
 
 	def test_missing_branch_refused(self):
 		with _Ctx(*_as("c@x"), patch(f"{POS}.getBranch", return_value="B1")):
@@ -148,10 +159,43 @@ class TestBillPrintGate(FrappeTestCase):
 				ury_print.print_pos_page("Note", "INV-1", "Standard")
 		mocks[-1].assert_not_called()
 
-	def test_select_network_printer_refused_for_non_billing(self):
-		with self._ctx(self._invoice(), roles=("URY Captain",)):
-			with self.assertRaises(frappe.PermissionError):
-				ury_print.select_network_printer("POS-1", "INV-1")
+	def _network(self, inv, printers=("P-1",), access_error=None, doctype="POS Invoice", printer="P-1", roles=("URY Captain",)):
+		engine = MagicMock()
+		engine.print_doc.return_value = {"status": "Failure"}
+		get_doc = lambda dt, name: inv if dt == "POS Invoice" else engine
+		with self._ctx(inv, roles=roles), patch(f"{PRINT}.frappe.get_doc", side_effect=get_doc), 			 patch(f"{PRINT}.validate_print_permission"), 			 patch(f"{PRINT}._enforce_order_access", side_effect=access_error) as access, 			 patch(f"{PRINT}._invoice_printers", return_value=set(printers)), 			 patch(f"{PRINT}.frappe.db.get_value", return_value="Std"):
+			ury_print.network_printing(doctype, "INV-1", printer, doc=frappe._dict(pos_profile="EVIL"))
+		return engine, access
+
+	def test_captain_with_order_access_prints_bill(self):
+		# review fix #1: order access + branch, no billing role needed
+		inv = self._invoice()
+		engine, access = self._network(inv)
+		access.assert_called_once()
+		self.assertIs(access.call_args[0][0], inv)
+		self.assertIsNone(engine.print_doc.call_args.kwargs["doc"])  # review fix #7: client doc ignored
+
+	def test_captain_without_order_access_refused(self):
+		with self.assertRaises(frappe.PermissionError):
+			self._network(self._invoice(), access_error=frappe.PermissionError)
+
+	def test_captain_other_branch_refused(self):
+		with self.assertRaises(frappe.PermissionError):
+			self._network(self._invoice(branch="B2"))
+
+	def test_printer_not_on_profile_or_room_refused(self):
+		with self.assertRaises(frappe.PermissionError):
+			self._network(self._invoice(), printers=("Kitchen-Of-Other-Branch",))
+
+	def test_network_printing_only_for_pos_invoice(self):
+		with self.assertRaises(frappe.PermissionError):
+			self._network(self._invoice(), doctype="Sales Invoice")
+
+	def test_invoice_printers_cover_profile_and_room(self):
+		inv = frappe._dict(pos_profile="POS-1", restaurant_table="T1")
+		rows = {"POS-1": ["P-1"], "R1": ["P-2"]}
+		with patch(f"{PRINT}.frappe.db.get_value", return_value="R1"), 			 patch(f"{PRINT}.frappe.get_all", side_effect=lambda dt, filters, pluck: rows[filters["parent"]]):
+			self.assertEqual(ury_print._invoice_printers(inv), {"P-1", "P-2"})
 
 	def test_print_pos_page_publishes_to_branch_users_only(self):
 		inv = self._invoice()

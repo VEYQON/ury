@@ -44,12 +44,18 @@ from ury.ury.api.ury_order_reservation_service import reconcile_order_reservatio
 from ury.ury.api.ury_stock_policy import get_branch_stock_policy
 
 SESSION_TOKEN_BYTES_HASH_LEN = 64  # frappe.generate_hash(length=..)
-MAX_ITEMS_PER_REQUEST = 50
+MAX_ITEMS_PER_REQUEST = 40  # VEYQON: review fix #14 -- never above MAX_LINES_PER_SESSION_HOUR
 MAX_COMMENT_LEN = 200
 # VEYQON: G-3 -- whole-number qty per line and a per-session line budget.
 # shortcut: constants, not profile settings; move to URY Self Ordering Profile if a restaurant needs other values.
 MAX_QTY_PER_LINE = 20
 MAX_LINES_PER_SESSION_HOUR = 40
+# VEYQON: review fix #2 -- (limit, seconds). Per-IP and per-device ceilings are abuse-only: a venue's
+# guests and kiosks share one NAT address, so a busy service must never hit them. Real per-guest
+# limits are per session (the _throttle_session calls). PIN attempts count failures only (#10).
+CONTEXT_PER_IP_LIMIT = (600, 600)
+CONTEXT_PER_DEVICE_LIMIT = (1200, 3600)
+PIN_FAILURES_PER_DEVICE_LIMIT = (5, 900)
 _GUEST = dict(allow_guest=True, methods=["POST"])  # VEYQON: S9-23 / G-1 -- tokens only in the POST body
 
 
@@ -59,13 +65,24 @@ def _throttle(action, identity, limit, seconds, amount=1):
     Only HTTP calls count, like frappe.rate_limiter (server-side callers are trusted)."""
     if not getattr(frappe.local, "request", None):
         return
-    key = frappe.cache.make_key(
-        f"ury_self_order:{action}:{hashlib.sha256(str(identity).encode()).hexdigest()}"
-    )
+    key = _throttle_key(action, identity)
     count = frappe.cache.incrby(key, amount)
     if count == amount:
         frappe.cache.expire(key, seconds)
     if count > limit:
+        frappe.throw(_("Too many requests. Please wait a moment and try again."), frappe.TooManyRequestsError)
+
+
+def _throttle_key(action, identity):
+    return frappe.cache.make_key(f"ury_self_order:{action}:{hashlib.sha256(str(identity).encode()).hexdigest()}")
+
+
+def _throttle_check(action, identity, limit, amount=0):
+    """VEYQON: review fix #10 / #14 -- refuse when `amount` more would pass `limit`, without counting.
+    shortcut: check-then-count is not atomic, concurrent requests can overrun by one batch; fine for abuse limits."""
+    if not getattr(frappe.local, "request", None):
+        return
+    if int(frappe.cache.get(_throttle_key(action, identity)) or 0) + amount > limit:
         frappe.throw(_("Too many requests. Please wait a moment and try again."), frappe.TooManyRequestsError)
 
 
@@ -169,6 +186,14 @@ def rotate_qr_signing_secret(profile):
     doc.check_permission("write")
     doc.qr_signing_secret = frappe.generate_hash(length=48)
     doc.save()
+    # VEYQON: review fix #12 -- QR sessions were minted from tokens signed with the old secret;
+    # end them too (device sessions do not use the secret).
+    frappe.db.set_value(
+        "URY Ordering Session",
+        {"ordering_profile": doc.name, "status": "Active", "source": ["in", ["QR Table", "QR Pickup"]]},
+        "status",
+        "Closed",
+    )
     return {"rotated": True}
 
 
@@ -383,9 +408,9 @@ def get_ordering_context(token=None, device_id=None, device_credential=None):
     or a device credential into a fresh ordering session and returns only
     customer-safe channel configuration — never raw branch/table names the
     client didn't already have a right to see."""
-    _throttle("context_ip", getattr(frappe.local, "request_ip", None), 30, 600)
+    _throttle("context_ip", getattr(frappe.local, "request_ip", None), *CONTEXT_PER_IP_LIMIT)
     if device_id:
-        _throttle("context_device", device_id, 60, 3600)
+        _throttle("context_device", device_id, *CONTEXT_PER_DEVICE_LIMIT)
 
     layout = "Mobile"
     if token:
@@ -414,8 +439,10 @@ def assign_device_table(device_id, device_credential, staff_pin, table):
     next iteration would link PINs to individual `Employee` records for
     per-staff attribution/audit — out of scope for this pass.
     """
-    _throttle("assign_table", device_id, 5, 900)  # VEYQON: S9-17 -- PIN guessing limit
+    # VEYQON: review fix #10 -- the device credential first, so unauthenticated calls cannot burn
+    # the device's PIN budget; then refuse once the failures used it up (S9-17 PIN guessing limit).
     profile, existing_table, source, device_name, layout = _resolve_device(device_id, device_credential)
+    _throttle_check("assign_table", device_id, PIN_FAILURES_PER_DEVICE_LIMIT[0], amount=1)
 
     table_mode = frappe.db.get_value("URY Ordering Device", device_name, "table_mode")
     if table_mode != "Selectable":
@@ -430,6 +457,7 @@ def assign_device_table(device_id, device_credential, staff_pin, table):
     # file for the same "don't over-engineer" bar). hmac.compare_digest
     # avoids trivial short-circuit timing leaks at negligible cost.
     if not configured_pin or not hmac.compare_digest(str(configured_pin), str(staff_pin or "")):
+        _throttle("assign_table", device_id, *PIN_FAILURES_PER_DEVICE_LIMIT)  # VEYQON: only failures count
         frappe.throw(_("Incorrect staff PIN"), frappe.PermissionError)
 
     if not frappe.db.exists("URY Table", table):
@@ -673,8 +701,9 @@ def add_customer_items(session, items):
 
         clean_items.append({"item": item_code, "item_name": item_code, "qty": qty, "comment": comment})
 
-    # VEYQON: G-3 -- cap lines per session per hour, not just per request.
-    _throttle("lines", session_token, MAX_LINES_PER_SESSION_HOUR, 3600, amount=len(clean_items))
+    # VEYQON: G-3 -- cap lines per session per hour, not just per request. Review fix #14: only
+    # checked here; counted after the order is saved, so a rejected order does not use the budget.
+    _throttle_check("lines", session_token, MAX_LINES_PER_SESSION_HOUR, amount=len(clean_items))
 
     order_type = "Dine In" if session.table else "Take Away"
 
@@ -792,6 +821,7 @@ def add_customer_items(session, items):
             invoice.save(ignore_permissions=True)
         except Exception as e:
             frappe.throw(_("Error while placing order: {0}").format(e))
+        _throttle("lines", session_token, MAX_LINES_PER_SESSION_HOUR, 3600, amount=len(clean_items))  # VEYQON: #14
 
         if not session.invoice:
             session.invoice = invoice.name

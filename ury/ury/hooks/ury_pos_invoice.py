@@ -3,6 +3,45 @@ from datetime import datetime
 from frappe.utils import now_datetime, get_time, now, flt, getdate, get_first_day, get_last_day, get_datetime
 from ury.ury.doctype.ury_order.ury_order import release_merge_cluster_tables
 from ury.ury.doctype.staff_discount_policy.staff_discount_policy import get_applicable_policy
+from ury.ury_pos.api import is_pos_superuser  # VEYQON: C-4
+
+# VEYQON: POS Invoice events go to the doctype room (doctype_subscribe, read-checked).
+POS_INVOICE_ROOM = "doctype:POS Invoice"
+# VEYQON: C-4 flags set by the URY APIs that may change a draft's items or prices.
+URY_ITEM_WRITE_FLAGS = ("ury_order_write", "in_bill_merge_sync", "ury_qty_reduction", "ury_bill_split")
+_ITEM_FIELDS = ("item_code", "qty", "rate", "discount_percentage", "discount_amount")
+_HEADER_FIELDS = ("additional_discount_percentage", "discount_amount", "apply_discount_on")
+
+
+def _item_state(doc):
+    rows = sorted(
+        tuple(r.get(f) if f == "item_code" else flt(r.get(f), 6) for f in _ITEM_FIELDS)
+        for r in (doc.get("items") or [])
+    )
+    header = tuple(doc.get(f) if f == "apply_discount_on" else flt(doc.get(f), 6) for f in _HEADER_FIELDS)
+    return rows, header
+
+
+def guard_ury_item_changes(doc):
+    """VEYQON: C-4 a draft URY POS Invoice's items, quantities, rates and discounts change
+    only through the URY APIs (sync_order, make_invoice, bill merge/split, qty reduction),
+    not a REST / desk save. Non-URY POS Invoices (profile without a restaurant) are untouched."""
+    if doc.get("is_return") or any(getattr(frappe.flags, f, False) for f in URY_ITEM_WRITE_FLAGS) or is_pos_superuser():
+        return
+    if not (doc.get("restaurant") or doc.get("restaurant_table") or (
+        doc.get("pos_profile") and frappe.db.get_value("POS Profile", doc.pos_profile, "restaurant")
+    )):
+        return
+    before = doc.get_doc_before_save()
+    if before is None:
+        if not doc.get("items"):
+            return
+    elif before.docstatus != 0 or _item_state(before) == _item_state(doc):
+        return
+    frappe.throw(
+        frappe._("Restaurant order items and prices can only be changed from the POS."),
+        frappe.PermissionError,
+    )
 
 
 def before_insert(doc, method):
@@ -12,6 +51,7 @@ def before_insert(doc, method):
 
 
 def validate(doc, method):
+    guard_ury_item_changes(doc)  # VEYQON: C-4
     validate_invoice(doc, method)
     validate_customer(doc, method)
     validate_price_list(doc, method)
@@ -474,7 +514,7 @@ def order_type_update(doc, method):
 
 # reload restaurant order page if submitted invoice is open there
 def ro_reload_submit(doc, method):
-    frappe.publish_realtime("reload_ro", {"name": doc.name})
+    frappe.publish_realtime("reload_ro", {"name": doc.name}, room=POS_INVOICE_ROOM)  # VEYQON: not the site room
 
 
 def validate_price_list(doc, method):
@@ -645,7 +685,8 @@ def sync_merged_invoice(doc):
                 "docstatus": target.docstatus,
                 "paid_amount": target.paid_amount,
                 "invoice_printed": target.invoice_printed
-            }
+            },
+            room=POS_INVOICE_ROOM,  # VEYQON: not the site room
         )
 
     except Exception:
@@ -671,7 +712,8 @@ def sync_merged_invoice(doc):
                 {
                     "name": doc.name,
                     "linked_invoice": linked_invoice,
-                }
+                },
+                room=POS_INVOICE_ROOM,  # VEYQON: not the site room
             )
         except Exception:
             frappe.log_error(

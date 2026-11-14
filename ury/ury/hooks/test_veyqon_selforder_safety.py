@@ -32,6 +32,9 @@ class _FakeCache:
 	def make_key(self, key):
 		return key
 
+	def get(self, key):
+		return self.store.get(key)
+
 	def incrby(self, key, amount):
 		self.store[key] = self.store.get(key, 0) + amount
 		return self.store[key]
@@ -93,6 +96,19 @@ class TestSecretsArePasswords(FrappeTestCase):
 		self.assertEqual(doc.qr_signing_secret, "new")
 		doc.save.assert_called_once_with()
 
+	def test_rotate_closes_open_qr_sessions(self):
+		# review fix #12
+		doc = MagicMock()
+		doc.name = "P1"
+		with patch(f"{SO}.frappe.get_doc", return_value=doc), patch(f"{SO}.frappe.generate_hash", return_value="new", create=True), 			patch(f"{SO}.frappe.db.set_value") as set_value:
+			self_ordering.rotate_qr_signing_secret("P1")
+		set_value.assert_called_once_with(
+			"URY Ordering Session",
+			{"ordering_profile": "P1", "status": "Active", "source": ["in", ["QR Table", "QR Pickup"]]},
+			"status",
+			"Closed",
+		)
+
 
 class TestStaffPin(_Throttled):
 	def _assign(self, pin):
@@ -109,6 +125,22 @@ class TestStaffPin(_Throttled):
 				self._assign("0000")
 		with self.assertRaises(frappe.TooManyRequestsError):
 			self._assign("1234")  # even the right PIN, once the window is used up
+
+	def test_right_pin_does_not_use_budget(self):
+		# review fix #10: only failed PIN attempts count
+		for _i in range(10):
+			with patch(f"{SO}.frappe.db.exists", side_effect=RuntimeError("past pin")):
+				with self.assertRaisesRegex(RuntimeError, "past pin"):
+					self._assign("1234")
+
+	def test_unknown_device_does_not_use_pin_budget(self):
+		# review fix #10: the device credential is checked before the throttle
+		with patch(f"{SO}._resolve_device", side_effect=frappe.PermissionError):
+			for _i in range(10):
+				with self.assertRaises(frappe.PermissionError):
+					self_ordering.assign_device_table("dev-1", "bad", "0000", "T1")
+		with self.assertRaises(frappe.PermissionError):
+			self._assign("0000")  # still an ordinary wrong-PIN refusal, not 429
 
 
 class TestResolveDeviceBranch(FrappeTestCase):
@@ -169,18 +201,26 @@ class TestAddItemsLimits(_Throttled):
 		with self.assertRaisesRegex(RuntimeError, "reached invoice"):
 			self._add([{"item": "TEA", "qty": "2"}])
 
-	def test_lines_per_session_capped(self):
-		batch = [{"item": "TEA", "qty": 1}] * 20
-		for _i in range(2):
-			with self.assertRaisesRegex(RuntimeError, "reached invoice"):
-				self._add(batch)
-		with self.assertRaises(frappe.TooManyRequestsError):
-			self._add([{"item": "TEA", "qty": 1}])
+	def _seed_lines(self, used, session="tok"):
+		self.cache.store[self_ordering._throttle_key("lines", session)] = used
 
-	def test_other_session_has_its_own_budget(self):
-		for _i in range(2):
+	def test_lines_per_session_capped(self):
+		self._seed_lines(self_ordering.MAX_LINES_PER_SESSION_HOUR - 1)
+		with self.assertRaises(frappe.TooManyRequestsError):
+			self._add([{"item": "TEA", "qty": 1}] * 2)
+
+	def test_failed_order_does_not_use_line_budget(self):
+		# review fix #14: counted only after the order is saved
+		for _i in range(5):
 			with self.assertRaisesRegex(RuntimeError, "reached invoice"):
 				self._add([{"item": "TEA", "qty": 1}] * 20)
+		self.assertIsNone(self.cache.store.get(self_ordering._throttle_key("lines", "tok")))
+
+	def test_one_request_fits_the_line_budget(self):
+		self.assertLessEqual(self_ordering.MAX_ITEMS_PER_REQUEST, self_ordering.MAX_LINES_PER_SESSION_HOUR)
+
+	def test_other_session_has_its_own_budget(self):
+		self._seed_lines(self_ordering.MAX_LINES_PER_SESSION_HOUR)
 		with self.assertRaisesRegex(RuntimeError, "reached invoice"):
 			self._add([{"item": "TEA", "qty": 1}], session="other")
 
@@ -189,6 +229,15 @@ class TestAddItemsLimits(_Throttled):
 			for _i in range(15):
 				with self.assertRaisesRegex(RuntimeError, "reached invoice"):
 					self._add([{"item": "TEA", "qty": 1}])
+
+
+class TestContextIpLimit(_Throttled):
+	def test_many_guests_behind_one_nat_not_limited(self):
+		# review fix #2: one venue IP must not lock out a busy service
+		with patch(f"{SO}._verify_qr_token", side_effect=RuntimeError("ok")):
+			for _i in range(300):
+				with self.assertRaisesRegex(RuntimeError, "ok"):
+					self_ordering.get_ordering_context(token="t")
 
 
 class TestReadRateLimit(_Throttled):
@@ -266,10 +315,21 @@ class TestQualityReviewScope(FrappeTestCase):
 			self.assertIsNone(checklist.permission_checklists("u@x.test"))
 
 	def test_validate_only_for_branch_reviews(self):
-		checklist.validate_checklist_review(frappe._dict(branch=None, employee=None))  # other apps: fine
+		with patch(f"{self.CL}.frappe.db.get_value", return_value=None):
+			checklist.validate_checklist_review(frappe._dict(branch=None, employee=None))  # other apps: fine
+			checklist.validate_checklist_review(frappe._dict(goal="Supplier Audit", branch=None, employee=None))
 		checklist.validate_checklist_review(frappe._dict(branch="B1", employee="u@x.test"))
 		with self.assertRaises(frappe.MandatoryError):
 			checklist.validate_checklist_review(frappe._dict(branch="B1", employee=None))
+
+	def test_ury_checklist_needs_branch(self):
+		# review fix W-9: a URY checklist cannot leave branch empty to dodge the filter
+		with patch(f"{self.CL}.frappe.db.get_value", return_value=None):
+			with self.assertRaises(frappe.MandatoryError):
+				checklist.validate_checklist_review(frappe._dict(goal="Cashier Opening Checklist", branch=None, employee="e"))
+		with patch(f"{self.CL}.frappe.db.get_value", return_value="Cashier"):  # restaurant-made goal with URY's custom_role
+			with self.assertRaises(frappe.MandatoryError):
+				checklist.validate_checklist_review(frappe._dict(goal="Bar Closing", branch=None, employee="e"))
 
 
 class TestDepartmentProfitabilityAccess(FrappeTestCase):
@@ -285,10 +345,18 @@ class TestDepartmentProfitabilityAccess(FrappeTestCase):
 			with self.assertRaises(frappe.PermissionError, msg=role):
 				self._access([role])
 
-	def test_no_access_role_wins_over_granting_role(self):
+	def test_granting_role_wins_over_no_access_role(self):
+		# review fix #5: no-access roles deny only when no granting role is held
 		for extra in ("Chef", "URY Chef", "Production"):
-			with self.assertRaises(frappe.PermissionError, msg=extra):
-				self._access(["URY Cashier", extra])
+			self.assertEqual(self._access(["URY Cashier", extra])[:2], ("quantity_only", True), extra)
+
+	def test_no_access_role_alone_denied(self):
+		for roles in (["URY Cashier"], ["URY Captain"], ["Cashier"], ["Captain"]):
+			with self.assertRaises(frappe.PermissionError, msg=roles):
+				self._access(roles)
+
+	def test_only_ury_role_names_are_no_access(self):
+		self.assertEqual(dept.NO_ACCESS_ROLES, {"URY Cashier", "URY Captain"})
 
 	def test_system_manager_and_administrator_full(self):
 		self.assertEqual(self._access(["System Manager"])[0], "full")

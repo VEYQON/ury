@@ -121,7 +121,7 @@ class TestBranchScopeGapFinding(FrappeTestCase):
 		helper."""
 		with patch(f"{MODULE}.frappe.session") as mock_session, \
 			patch(f"{MODULE}.frappe.get_roles", return_value=["Employee"]), \
-			patch("ury.ury_pos.api.getBranch", return_value="Branch B"):
+			patch("ury.ury_pos.api.user_branches", return_value=["Branch B"]):
 			mock_session.user = "waiter@ury.test"
 			with self.assertRaises(svc.ExecutionError) as ctx:
 				svc._require_kot_branch_scope("Branch A", user="waiter@ury.test")
@@ -130,7 +130,7 @@ class TestBranchScopeGapFinding(FrappeTestCase):
 	def test_branch_scope_helper_allows_matching_branch(self):
 		with patch(f"{MODULE}.frappe.session") as mock_session, \
 			patch(f"{MODULE}.frappe.get_roles", return_value=["Employee"]), \
-			patch("ury.ury_pos.api.getBranch", return_value="Branch A"):
+			patch("ury.ury_pos.api.user_branches", return_value=["Branch A"]):
 			mock_session.user = "waiter@ury.test"
 			svc._require_kot_branch_scope("Branch A", user="waiter@ury.test")  # must not raise
 
@@ -147,7 +147,7 @@ class TestBranchScopeGapFinding(FrappeTestCase):
 			patch(f"{MODULE}._find_prior_result", return_value=None), \
 			patch(f"{MODULE}._kot_scope", return_value=("Branch A", "Company A", None)), \
 			patch(f"{MODULE}._require_kot_open"), \
-			patch("ury.ury_pos.api.getBranch", return_value="Branch B"):
+			patch("ury.ury_pos.api.user_branches", return_value=["Branch B"]):
 			mock_session.user = "waiter-in-branch-b@ury.test"
 			with self.assertRaises(svc.ExecutionError) as ctx:
 				svc.start_execution("KOT-0001", "idem-1")
@@ -169,7 +169,7 @@ class TestBranchScopeGapFinding(FrappeTestCase):
 			patch(f"{MODULE}._lock_execution_row", return_value=None), \
 			patch(f"{MODULE}.frappe.get_doc", return_value=fake_doc), \
 			patch(f"{MODULE}.append_audit"), \
-			patch("ury.ury_pos.api.getBranch", return_value="Branch A"):
+			patch("ury.ury_pos.api.user_branches", return_value=["Branch A"]):
 			mock_session.user = "waiter-in-branch-a@ury.test"
 			result = svc.start_execution("KOT-0001", "idem-1")
 			self.assertEqual(result["name"], "UKE-0002")

@@ -199,14 +199,20 @@ def _require_kot_open(kot):
 
 
 def _require_kot_branch_scope(branch, user=None):
-	"""Require the KOT branch to match the user's server-side branch scope."""
-	from ury.ury_pos.api import getBranch
+	"""Require the KOT branch to be one of the user's server-side branches."""
+	from ury.ury_pos.api import user_branches
 
 	user = user or frappe.session.user
 	if user == "Administrator" or "System Manager" in frappe.get_roles(user):
 		return
-	active_branch = getBranch()
-	if not active_branch or active_branch in {"all", "All", "ALL"} or active_branch != branch:
+	# VEYQON: review fix #4 — any of the user's URY User branches; no row is a setup error, not a bypass.
+	branches = [b for b in user_branches(user) if b not in {"all", "All", "ALL"}]
+	if not branches:
+		raise ExecutionError(
+			BRANCH_SCOPE_MISMATCH,
+			_("User {0} is not assigned to any branch. Ask an administrator to add them as a URY User on the branch.").format(user),
+		)
+	if not branch or branch not in branches:
 		raise ExecutionError(BRANCH_SCOPE_MISMATCH, _("KOT branch {0} is outside your active branch scope").format(branch))
 
 

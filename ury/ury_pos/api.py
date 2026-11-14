@@ -150,11 +150,36 @@ def is_pos_superuser():
     return frappe.session.user == "Administrator" or "System Manager" in frappe.get_roles()
 
 
+def user_branches(user=None):
+    """VEYQON: review fix #4 — every branch the user has a `URY User` row on.
+
+    getBranch() returns only the first row; it is kept as is for its existing callers.
+    """
+    return [
+        row[0]
+        for row in frappe.db.sql(
+            """
+            SELECT b.branch
+            FROM `tabURY User` AS a
+            INNER JOIN `tabBranch` AS b ON a.parent = b.name
+            WHERE a.user = %s
+            """,
+            user or frappe.session.user,
+        )
+    ]
+
+
 def assert_user_branch(branch, message=None):
-    """Throw PermissionError unless `branch` is the session user's URY branch."""
+    """Throw PermissionError unless `branch` is one of the session user's URY branches."""
     if is_pos_superuser():
         return
-    if not branch or branch != getBranch():
+    if not branch:
+        frappe.throw(message or _("Not permitted outside your branch."), frappe.PermissionError)
+    # getBranch() first: the common single-branch case, and it throws its own "not associated
+    # with any Branch" error for users without a URY User row.
+    if branch == getBranch():
+        return
+    if branch not in user_branches():  # VEYQON: review fix #4 — multi-branch users
         frappe.throw(message or _("Not permitted outside your branch."), frappe.PermissionError)
 
 

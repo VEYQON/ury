@@ -908,6 +908,8 @@ class TestKotExecuteLineIdentity(FrappeTestCase):
     """End-to-end regression: cancelling one of two identical-item lines
     must only affect that line's KOT delta, never the sibling line."""
 
+    @patch(f"{MODULE}._assert_items_on_invoice", MagicMock())  # VEYQON: covered in test_veyqon_order_safety
+    @patch(f"{MODULE}.assert_user_branch", MagicMock())
     @patch("ury.ury.api.ury_waiter_print.print_combined_waiter_order_slip")
     @patch(f"{MODULE}.process_items_for_cancel_kot")
     @patch(f"{MODULE}.process_items_for_kot")

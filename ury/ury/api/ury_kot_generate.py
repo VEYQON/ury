@@ -15,6 +15,7 @@ from ury.ury.api.ury_production_context import resolve_production_context
 # bare item_code, so the same item on two lines (different comments,
 # courses, or a plain duplicate) could have the wrong line cancelled.
 from ury.ury.api.ury_order_reservation_service import _line_context, _line_key, _line_ref
+from ury.ury_pos.api import assert_user_branch  # VEYQON: P-3/C-2
 
 
 # Load JSON data or return as is if it's already a Python dictionary
@@ -491,6 +492,27 @@ def create_cancel_kot_doc(
 
 
 # Whitelisted function to handle KOT entry
+def _assert_items_on_invoice(pos_invoice, items):
+    """VEYQON: P-3/C-2 the kitchen may only be sent what the saved invoice bills: per
+    item_code, the client's current qty must be >= 0 and <= the saved invoice qty.
+    All callers (sync_order, self-order, ury_pos_kot.js) build it from the saved rows."""
+    saved = defaultdict(float)
+    for row in pos_invoice.get("items") or []:
+        saved[row.item_code] += flt(row.qty)
+    sent = defaultdict(float)
+    for row in items or []:
+        qty = flt(row.get("qty"))
+        if qty < 0:
+            frappe.throw(frappe._("Invalid quantity for KOT."), frappe.ValidationError)
+        sent[row.get("item") or row.get("item_code")] += qty
+    for code, qty in sent.items():
+        if flt(qty - saved.get(code, 0), 6) > 0:
+            frappe.throw(
+                frappe._("Item {0} is not on invoice {1} in that quantity.").format(code, pos_invoice.name),
+                frappe.PermissionError,
+            )
+
+
 @frappe.whitelist()
 def kot_execute(
     invoice_id,
@@ -506,8 +528,11 @@ def kot_execute(
     if not frappe.has_permission("POS Invoice", "write", doc=pos_invoice):
         frappe.throw(_("Not permitted to execute KOT for this invoice"), frappe.PermissionError)
 
+    assert_user_branch(pos_invoice.branch)  # VEYQON: P-3/C-2
+
     current_items = load_json(current_items)
     previous_items = load_json(previous_items)
+    _assert_items_on_invoice(pos_invoice, current_items)  # VEYQON: P-3/C-2
 
     # Diff current vs previous items PER STABLE LINE (see _line_keyed_items),
     # not per item_code. Two lines of the same item_code (different

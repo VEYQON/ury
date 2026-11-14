@@ -84,7 +84,10 @@ MISSING_APPROVED_PLAN = "MISSING_APPROVED_PLAN"
 MISSING_COST_ATTRIBUTION = "MISSING_COST_ATTRIBUTION"
 
 # Permission tiers.
-NO_ACCESS_ROLES = {"Cashier", "URY Cashier", "Captain", "URY Captain"}
+# VEYQON: review fix #5 -- only URY's own role names; generic "Cashier" / "Captain" may belong to
+# other apps on a shared tenant. A no-access role denies only when no granting role is held
+# (checked last in _resolve_access).
+NO_ACCESS_ROLES = {"URY Cashier", "URY Captain"}
 QUANTITY_ONLY_ROLES = {"Chef", "URY Chef", "Production", "URY Production"}
 DEPARTMENT_MANAGER_ROLES = {"Department Manager", "URY Department Manager"}
 BRANCH_MANAGER_ROLES = {"URY Manager"}
@@ -309,10 +312,6 @@ def _resolve_access(company, branch, department):
 
     if roles & FULL_ACCESS_ROLES or is_admin:
         return "full", False, department
-
-    # VEYQON: GF-1 -- a no-access role wins over any granting role (was checked last).
-    if roles & NO_ACCESS_ROLES:
-        frappe.throw(_("Not permitted to access department profitability"), frappe.PermissionError)
 
     if roles & BRANCH_MANAGER_ROLES:
         assigned_branch = frappe.db.get_value("Employee", {"user_id": frappe.session.user}, "branch")

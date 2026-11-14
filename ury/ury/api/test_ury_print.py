@@ -20,14 +20,25 @@ from ury.ury.api.ury_print import (
 # VEYQON: P-5 — run these as a superuser so the billing-role / branch gate does not need
 # fixtures; the gate itself is covered in ury/ury/hooks/test_veyqon_pos_safety.py.
 _superuser = patch("ury.ury_pos.api.is_pos_superuser", return_value=True)
+# VEYQON: review fixes #1 / #7 — order access and the printer-belongs-to-invoice check are
+# covered in test_veyqon_pos_safety.py; here every printer is the invoice's own.
+_any_printer = MagicMock()
+_any_printer.__contains__.return_value = True
+_module_patches = (
+	_superuser,
+	patch("ury.ury.api.ury_print._enforce_order_access"),
+	patch("ury.ury.api.ury_print._invoice_printers", return_value=_any_printer),
+)
 
 
 def setUpModule():
-	_superuser.start()
+	for p in _module_patches:
+		p.start()
 
 
 def tearDownModule():
-	_superuser.stop()
+	for p in _module_patches:
+		p.stop()
 
 
 class TestNetworkPrinting(FrappeTestCase):
@@ -42,7 +53,7 @@ class TestNetworkPrinting(FrappeTestCase):
 			"status": "Success",
 			"cups_job_id": 123,
 		}
-		mock_get_doc.side_effect = [MagicMock(), mock_printer_doc]
+		mock_get_doc.side_effect = [MagicMock(pos_profile=None, restaurant_table=None), mock_printer_doc]
 
 		with patch(
 			"ury.ury.api.ury_fulfilment_posting_service.trigger_manufacture_on_bill_print"
@@ -71,7 +82,7 @@ class TestNetworkPrinting(FrappeTestCase):
 			"status": "Failure",
 			"message": "printer offline",
 		}
-		mock_get_doc.side_effect = [MagicMock(), mock_printer_doc]
+		mock_get_doc.side_effect = [MagicMock(pos_profile=None, restaurant_table=None), mock_printer_doc]
 
 		with patch(
 			"ury.ury.api.ury_fulfilment_posting_service.trigger_manufacture_on_bill_print"
@@ -90,7 +101,7 @@ class TestNetworkPrinting(FrappeTestCase):
 		"""Non-dict engine results are returned unchanged (no PrintResult wrap)."""
 		mock_printer_doc = MagicMock()
 		mock_printer_doc.print_doc.return_value = "Success"
-		mock_get_doc.side_effect = [MagicMock(), mock_printer_doc]
+		mock_get_doc.side_effect = [MagicMock(pos_profile=None, restaurant_table=None), mock_printer_doc]
 
 		result = network_printing("POS Invoice", "INV-001", "Printer-1")
 

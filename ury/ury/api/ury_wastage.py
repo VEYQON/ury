@@ -218,7 +218,8 @@ def held_quantity(auth_doc, exclude_wastage=None):
     # VEYQON: S10-17 URY Wastage has no `wasted_qty` column; qty lives in the items child table.
     already_wasted = _sum_live_if_exists(
         WASTAGE_DOCTYPE,
-        {"issue_authorization": auth_doc.get("name"), "status": "Authorized"},
+        # VEYQON: review fix #9 — only rows for the authorized component count.
+        {"issue_authorization": auth_doc.get("name"), "status": "Authorized", "component_item": auth_doc.get("component_item")},
         "wasted_qty",
         exclude_name=exclude_wastage,
     )
@@ -252,9 +253,10 @@ def _sum_live_if_exists(doctype, filters, fieldname, exclude_name=None):
         query = f"""
             SELECT SUM(i.qty)
             FROM `tab{WASTAGE_DOCTYPE}` w
-            JOIN `tabWastage Item` i ON w.name = i.parent
+            JOIN `tabWastage Item` i ON w.name = i.parent AND i.parenttype = %(parenttype)s
             {where_clause}
         """
+        query_filters["parenttype"] = WASTAGE_DOCTYPE  # VEYQON: review fix #9 — Wastage Item may be a child of other doctypes
         res = frappe.db.sql(query, query_filters)
         return res[0][0] or 0
 

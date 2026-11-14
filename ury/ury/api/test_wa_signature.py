@@ -48,8 +48,10 @@ class _PermErr(Exception):
 	pass
 
 
-def _fake_frappe(path, method, body, header, secret, chairman_account=None):
+def _fake_frappe(path, method, body, header, secret, chairman_account=None, phone_ids=None):
 	f = types.ModuleType("frappe")
+	f.db = mock.Mock()
+	f.db.get_value.side_effect = lambda dt, name, field: (phone_ids or {}).get(name)
 	f.PermissionError = _PermErr
 	def throw(msg, exc=Exception):
 		raise exc(msg)
@@ -90,6 +92,28 @@ class TestGuard(unittest.TestCase):
 	def test_no_secret_and_no_chairman_channel_passes(self):
 		# VEYQON: W-6 -- URY does not use WhatsApp here; other apps' webhooks are untouched.
 		self.assertIsNone(self.run_guard(self.P, "POST", b"{}", None, None))
+
+	def test_other_apps_number_passes_unsigned(self):
+		# VEYQON: review fix W-6 -- a webhook for another app's WhatsApp number is not URY's to check.
+		b = b'{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"999"}}}]}]}'
+		self.assertIsNone(self.run_guard(self.P, "POST", b, None, SECRET, "Owner WA", {"Owner WA": "111"}))
+
+	def test_urys_number_needs_signature(self):
+		b = b'{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"111"}}}]}]}'
+		with self.assertRaises(_PermErr):
+			self.run_guard(self.P, "POST", b, None, SECRET, "Owner WA", {"Owner WA": "111"})
+		self.assertIsNone(self.run_guard(self.P, "POST", b, sign(b), SECRET, "Owner WA", {"Owner WA": "111"}))
+
+	def test_mixed_or_unparseable_payload_still_checked(self):
+		for b in (b'{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"999"}}},'
+				  b'{"value":{"metadata":{"phone_number_id":"111"}}}]}]}', b"not json", b'{"entry":"x"}'):
+			with self.assertRaises(_PermErr, msg=b):
+				self.run_guard(self.P, "POST", b, None, SECRET, "Owner WA", {"Owner WA": "111"})
+
+	def test_payload_phone_ids(self):
+		self.assertEqual(w.payload_phone_ids(b'{"entry":{"changes":{"value":{"metadata":{"phone_number_id":5}}}}}'), {"5"})
+		self.assertEqual(w.payload_phone_ids(b"{}"), set())
+		self.assertIsNone(w.payload_phone_ids(b"[1]"))
 
 	def test_get_untouched(self):
 		self.assertIsNone(self.run_guard(self.P, "GET", b"", None, None))

@@ -152,6 +152,8 @@ class TestMergeTables(FrappeTestCase):
             _patch_db(stack, fake)
             stack.enter_context(patch(f"{MODULE}._sync_active_order_with_merge_cluster"))
             stack.enter_context(patch(f"{MODULE}._reconcile_open_invoices_for_tables"))
+            stack.enter_context(patch(f"{MODULE}._assert_table_merge_access"))  # VEYQON: C-1
+            stack.enter_context(patch(f"{MODULE}._lock_tables"))
             return merge_tables_batch(anchor, targets)
 
     def test_merge_writes_symmetric_partner_lists(self):
@@ -293,6 +295,8 @@ class TestMergeTables(FrappeTestCase):
             mock_reconcile = stack.enter_context(
                 patch(f"{MODULE}._reconcile_open_invoices_for_tables")
             )
+            stack.enter_context(patch(f"{MODULE}._assert_table_merge_access"))  # VEYQON: C-1
+            stack.enter_context(patch(f"{MODULE}._lock_tables"))
             merge_tables_batch("T1", ["T2"])
         mock_sync.assert_called_once_with("T1")
         mock_reconcile.assert_called_once_with(["T1", "T2"])
@@ -304,6 +308,8 @@ class TestUnmergeTables(FrappeTestCase):
     def _run(self, fake, table):
         with ExitStack() as stack:
             _patch_db(stack, fake)
+            stack.enter_context(patch(f"{MODULE}._assert_table_merge_access"))  # VEYQON: C-1
+            stack.enter_context(patch(f"{MODULE}._lock_tables"))
             return unmerge_tables(table)
 
     def test_unmerges_every_member_of_the_cluster(self):
@@ -701,6 +707,10 @@ class TestMakeInvoice(FrappeTestCase):
 
     def _run(self, invoice, payments, stack, discount=None, table="T1", roles=None, submit_invoice=1):
         stack.enter_context(patch(f"{MODULE}.get_order_invoice", return_value=invoice))
+        # VEYQON: P-1 gates are covered in ury/ury/hooks/test_veyqon_order_safety.py
+        stack.enter_context(patch(f"{MODULE}.assert_billing_user"))
+        stack.enter_context(patch(f"{MODULE}.assert_user_branch"))
+        stack.enter_context(patch(f"{MODULE}.frappe.db.get_value"))
         stack.enter_context(
             patch(f"{MODULE}.frappe.get_value", return_value="Dine In")
         )
@@ -750,6 +760,11 @@ class TestMakeInvoice(FrappeTestCase):
         invoice = self._invoice()
         with ExitStack() as stack:
             stack.enter_context(patch(f"{MODULE}.frappe.get_doc", return_value=invoice))
+            # VEYQON: P-2 gates are covered in ury/ury/hooks/test_veyqon_order_safety.py
+            stack.enter_context(patch(f"{MODULE}.frappe.has_permission"))
+            stack.enter_context(patch(f"{MODULE}.assert_billing_user"))
+            stack.enter_context(patch(f"{MODULE}.assert_user_branch"))
+            stack.enter_context(patch(f"{MODULE}._assert_fully_paid"))
             mock_free = stack.enter_context(patch(f"{MODULE}._free_tables_if_no_open_invoices"))
             res = submit_order_invoice(invoice.name)
         self.assertEqual(res, {"name": invoice.name, "status": "Submitted"})

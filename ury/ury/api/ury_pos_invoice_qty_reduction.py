@@ -85,11 +85,15 @@ def _require_order_reduction_access(pos_invoice, pos_profile):
 	branch's or another waiter's printed order.
 	"""
 	from ury.ury.doctype.ury_order.ury_order import _can_remove_sent_items, _enforce_order_access
-	from ury.ury_pos.api import assert_user_branch
+	from ury.ury_pos.api import assert_user_branch, has_pos_profile_role
 
-	_enforce_order_access(pos_invoice, require_modify=True)
+	# VEYQON: review fix 2b6d20c7 #3 — a billing user of the profile may reduce a printed bill;
+	# others need remove_items or a transfer_role_permissions role, and only while the order
+	# is still modifiable for them (require_modify: not yet printed).
+	is_billing = has_pos_profile_role(pos_profile.name)
+	_enforce_order_access(pos_invoice, require_modify=not is_billing)
 	assert_user_branch(pos_invoice.branch)
-	if not _can_remove_sent_items(pos_profile, pos_invoice):
+	if not is_billing and not _can_remove_sent_items(pos_profile, pos_invoice):
 		raise QtyReductionError(NOT_PERMITTED, _("Not permitted to reduce items already sent to the kitchen"))
 
 
